@@ -95,7 +95,10 @@ tested too. The checks are:
 - **Unit and integration tests**, including:
   - test vectors from the Python reference;
   - a full handshake against an independent fake sensor;
-  - exact-boundary tests derived from mutation testing (cargo-mutants).
+  - exact-boundary tests derived from mutation testing (cargo-mutants);
+  - the replay machinery (log parser, `ReplaySensor`, masks) on synthetic logs in
+    python-validity's debug-log format; real recordings are replayed only when
+    `VALIDITY_TRACES` points to them, and never leave the machine.
 - **End to end:** in a Debian container, the daemon runs with a fake sensor and is
   driven by fprintd's own `fprintd-enroll/verify/list/delete`, `pam_fprintd` (through
   `pamtester`) and a real polkit.

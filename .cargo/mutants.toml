@@ -48,4 +48,8 @@ exclude_re = [
     # cnt is 2 or 3: bits 20-21; bits 24-26), `(u - 1) | 8` (`bitpack` returns
     # 1 <= u <= 8, so u - 1 <= 7) and `i | (0x85 << 24)` (i < 112).
     "scanner.rs:.*replace \\| with \\^ in Scanner::line_update_type_1",
+    # `b.len() > 24` vs `>=` in `message`: its only caller passes `line.trim_end()`,
+    # so a line of exactly 24 bytes cannot end with the space that `b[23] == b' '`
+    # requires; both versions then fall through to the `LEVEL:logger:` form.
+    "replay.rs:.*replace > with >= in message",
 ]
