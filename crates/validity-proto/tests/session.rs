@@ -240,3 +240,18 @@ fn usb_session_end_to_end() {
     ));
     assert_eq!(s.into_link().plain, [vec![0x3e]]);
 }
+
+#[test]
+fn cancel_handle_take_consumes_one_cancellation() {
+    // Other `Sensor` implementations honour the handle through `take`.
+    let h = validity_proto::session::CancelHandle::default();
+    assert!(!h.take());
+    let other = h.clone();
+    other.cancel();
+    assert!(h.take());
+    assert!(!h.take());
+    h.cancel();
+    h.cancel();
+    assert!(other.take());
+    assert!(!other.take());
+}

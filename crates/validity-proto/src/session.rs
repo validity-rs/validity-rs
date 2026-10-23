@@ -102,7 +102,11 @@ impl CancelHandle {
         self.0.store(true, Ordering::SeqCst);
     }
 
-    fn take(&self) -> bool {
+    /// Consumes a pending cancellation: true once per [`CancelHandle::cancel`].
+    ///
+    /// For [`Sensor`] implementations other than [`UsbSession`] (test doubles,
+    /// emulators) that honour the same handle in their `wait_int`.
+    pub fn take(&self) -> bool {
         self.0.swap(false, Ordering::SeqCst)
     }
 
