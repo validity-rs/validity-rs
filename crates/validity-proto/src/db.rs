@@ -582,6 +582,123 @@ mod tests {
         assert_eq!(i.roots, [3]);
     }
 
+    fn value_reply(dbid: u16, kind: u16, value: &[u8]) -> Vec<u8> {
+        let mut r = vec![0, 0];
+        for v in [dbid, kind, 3, value.len() as u16, 0] {
+            r.extend_from_slice(&v.to_le_bytes());
+        }
+        r.extend_from_slice(value);
+        r
+    }
+
+    fn children_reply(dbid: u16, kind: u16, children: &[(u16, u16)]) -> Vec<u8> {
+        let mut r = vec![0, 0];
+        for v in [dbid, kind, 3, 0, children.len() as u16, 0] {
+            r.extend_from_slice(&v.to_le_bytes());
+        }
+        for (c, k) in children {
+            r.extend_from_slice(&c.to_le_bytes());
+            r.extend_from_slice(&k.to_le_bytes());
+        }
+        r
+    }
+
+    #[test]
+    fn record_queries() {
+        let stg = storage_reply(&[(0x11, 0x4c)]);
+        let mut s = Script::new(vec![
+            // list_users
+            (user_storage_cmd(0, STORAGE_NAME), stg.clone()),
+            (
+                vec![0x4a, 0x11, 0, 0, 0, 0, 0],
+                user_reply(0x11, &[(0x21, 1)]),
+            ),
+            // get_storage_data
+            (user_storage_cmd(0, STORAGE_NAME), stg.clone()),
+            (
+                vec![0x46, 3, 0],
+                children_reply(3, 4, &[(0x11, 5), (0x30, 8)]),
+            ),
+            // dump_tree from the storage
+            (vec![0x49, 3, 0], value_reply(3, 4, b"StgWindsor\0")),
+            (vec![0x46, 3, 0], children_reply(3, 4, &[(0x11, 5)])),
+            (vec![0x49, 0x11, 0], value_reply(0x11, 5, &[1, 2])),
+            (vec![0x46, 0x11, 0], children_reply(0x11, 5, &[])),
+            // get_finger_blobs
+            (
+                vec![0x4a, 0x11, 0, 0, 0, 0, 0],
+                user_reply(0x11, &[(0x21, 1), (0x22, 6)]),
+            ),
+            (
+                vec![0x46, 0x22, 0],
+                children_reply(0x22, 6, &[(0x40, 8), (0x41, 9), (0x42, 8)]),
+            ),
+            (vec![0x49, 0x40, 0], value_reply(0x40, 8, b"A")),
+            (vec![0x49, 0x42, 0], value_reply(0x42, 8, b"BB")),
+            // a subtype with no finger
+            (
+                vec![0x4a, 0x11, 0, 0, 0, 0, 0],
+                user_reply(0x11, &[(0x21, 1)]),
+            ),
+            // del_record
+            (vec![0x48, 0x22, 0], vec![0, 0]),
+            (vec![0x48, 0x23, 0], vec![0xb3, 0x04]),
+        ]);
+        let users = list_users(&mut s).unwrap();
+        assert_eq!(users.len(), 1);
+        assert_eq!(users[0].fingers[0].dbid, 0x21);
+        assert_eq!(get_storage_data(&mut s).unwrap(), [0x30]);
+        let tree = dump_tree(&mut s, 3).unwrap();
+        assert_eq!(tree.record.value, b"StgWindsor\0");
+        assert_eq!(tree.children.len(), 1);
+        assert_eq!(tree.children[0].record.value, [1, 2]);
+        assert!(tree.children[0].children.is_empty());
+        assert_eq!(
+            get_finger_blobs(&mut s, 0x11, 6).unwrap(),
+            [b"A".to_vec(), b"BB".to_vec()]
+        );
+        assert!(matches!(
+            get_finger_blobs(&mut s, 0x11, 6),
+            Err(Error::Protocol(_))
+        ));
+        del_record(&mut s, 0x22).unwrap();
+        assert!(matches!(
+            del_record(&mut s, 0x23),
+            Err(Error::Status(0x04b3))
+        ));
+        s.done();
+    }
+
+    #[test]
+    fn init_db_creates_storage_once() {
+        let b = blobs();
+        let info = [vec![0, 0], vec![0; 24]].concat();
+        let mut s = Script::new(vec![
+            (user_storage_cmd(0, STORAGE_NAME), vec![0xb3, 0x04]),
+            (vec![0x45], info.clone()),
+            (b.db_write_enable.clone(), vec![0, 0]),
+            (
+                new_record_cmd(1, TYPE_STORAGE, 3, b"StgWindsor\0"),
+                vec![0, 0, 3, 0],
+            ),
+            (vec![0x1a], vec![0, 0]),
+            (user_storage_cmd(0, STORAGE_NAME), storage_reply(&[])),
+            // new_data wraps its value as tag 1.
+            (user_storage_cmd(0, STORAGE_NAME), storage_reply(&[])),
+            (vec![0x45], info),
+            (b.db_write_enable.clone(), vec![0, 0]),
+            (
+                new_record_cmd(0x22, TYPE_DATA, 3, &[1, 0, 2, 0, 7, 7]),
+                vec![0, 0, 0x40, 0],
+            ),
+            (vec![0x1a], vec![0, 0]),
+        ]);
+        init_db(&mut s, &b).unwrap();
+        init_db(&mut s, &b).unwrap();
+        assert_eq!(new_data(&mut s, &b, 0x22, &[7, 7]).unwrap(), 0x40);
+        s.done();
+    }
+
     #[test]
     fn enroll_records_sequence() {
         let b = blobs();

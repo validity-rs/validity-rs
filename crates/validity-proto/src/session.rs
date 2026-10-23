@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use p256::ecdsa::VerifyingKey;
+
 use crate::channel::{self, Channel, TlsFlash, firmware_key};
 use crate::cmd::Error;
 use crate::tls::{self, PskKeys};
@@ -123,6 +125,7 @@ pub struct UsbSession<L: UsbLink, E: Entropy> {
     channel: Option<Channel>,
     rng: E,
     psk: PskKeys,
+    fw_key: VerifyingKey,
     cancel: CancelHandle,
 }
 
@@ -135,8 +138,16 @@ impl<L: UsbLink, E: Entropy> UsbSession<L, E> {
             channel: None,
             rng,
             psk,
+            fw_key: firmware_key(),
             cancel: CancelHandle::default(),
         }
+    }
+
+    /// Replaces the firmware key that must have signed the sensor's ECDH key
+    /// (hardcoded per firmware revision in the vendor driver; tests use their own).
+    pub fn with_firmware_key(mut self, key: VerifyingKey) -> Self {
+        self.fw_key = key;
+        self
     }
 
     pub fn cancel_handle(&self) -> CancelHandle {
@@ -167,7 +178,7 @@ impl<L: UsbLink, E: Entropy> Sensor for UsbSession<L, E> {
 
     fn open_channel(&mut self, tls_flash: &[u8]) -> Result<(), Error> {
         self.channel = None;
-        let flash = TlsFlash::parse(tls_flash, &self.psk, &firmware_key())?;
+        let flash = TlsFlash::parse(tls_flash, &self.psk, &self.fw_key)?;
         let mut ch = Channel::new(flash);
         ch.open(&mut self.link, &mut self.rng)?;
         self.channel = Some(ch);
