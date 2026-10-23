@@ -1,0 +1,20 @@
+# End-to-end test image: Debian 13 with the Rust toolchain (same pinned base
+# as Dockerfile.debian), a system bus, polkit, fprintd's client tools,
+# pam_fprintd and pamtester. ci/e2e/run.sh starts the bus, polkit and the
+# daemon (with the emulated sensor) and drives it with the stock clients.
+FROM rust:1.99.1-trixie@sha256:931c2c0531a8b143e044f0f3914dfe802f15bb3d1955f0b657e9359327ac2ffc
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        dbus-daemon \
+        dbus-bin \
+        fprintd \
+        libpam-fprintd \
+        pamtester \
+        polkitd \
+    && rm -rf /var/lib/apt/lists/* \
+    && rustc --version \
+    && dpkg-query -W fprintd libpam-fprintd pamtester polkitd dbus-daemon
+
+WORKDIR /workspace
+CMD ["/bin/bash"]

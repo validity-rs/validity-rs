@@ -136,6 +136,17 @@ jobs:
           persist-credentials: false
       - run: ci/run.sh "distro:${{ matrix.distro }}"
 
+  e2e:
+    # The daemon with the emulated sensor on a system bus with polkit, driven
+    # by fprintd's client tools and pam_fprintd (pamtester), in a container.
+    name: End to end (fprintd clients, pam_fprintd)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: ci/run.sh e2e
+
   deny:
     name: Cargo Deny
     runs-on: ubuntu-latest

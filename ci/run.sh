@@ -3,7 +3,7 @@
 # run means a green CI run.
 #
 #   ci/run.sh                 # quick: noai gitleaks fmt clippy test doc
-#   ci/run.sh all             # quick + msrv deny distro (needs docker)
+#   ci/run.sh all             # quick + msrv deny distro e2e (needs docker)
 #   ci/run.sh clippy distro   # selected jobs
 #   ci/run.sh distro:fedora   # one distro
 #
@@ -103,9 +103,12 @@ job_msrv() {
 job_deny() { "$(tool_cargo_deny)" --all-features check; }
 job_audit() { "$(tool_cargo_audit)" audit --deny warnings; }
 job_distro() { local d; for d in "${@:-${DISTROS[@]}}"; do say "distro $d"; in_image "$d" cargo test --workspace; done; }
+# The daemon with the emulated sensor behind a system bus and polkit, driven by
+# fprintd's own clients and pam_fprintd (docker/Dockerfile.e2e, ci/e2e/run.sh).
+job_e2e() { in_image e2e ci/e2e/run.sh; }
 
 QUICK=(noai gitleaks fmt clippy test doc)
-ALL=("${QUICK[@]}" msrv deny distro)
+ALL=("${QUICK[@]}" msrv deny distro e2e)
 
 jobs=("$@")
 [ ${#jobs[@]} -eq 0 ] && jobs=("${QUICK[@]}")

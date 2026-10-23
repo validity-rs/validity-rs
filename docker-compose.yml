@@ -65,9 +65,21 @@ services:
       - cargo-registry:/root/.cargo/registry
       - target-archlinux:/workspace/target
 
+  # Not a distro of the test matrix: the end-to-end test (ci/e2e/run.sh).
+  e2e:
+    <<: *common
+    build:
+      context: docker
+      dockerfile: Dockerfile.e2e
+    volumes:
+      - .:/workspace
+      - cargo-registry:/usr/local/cargo/registry
+      - target-e2e:/workspace/target
+
 volumes:
   cargo-registry:
   target-debian:
   target-alpine:
   target-fedora:
   target-archlinux:
+  target-e2e:
