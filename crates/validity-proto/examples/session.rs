@@ -3,6 +3,7 @@
 //!
 //! Usage (root): session <synaWudfBioUsb.dll> <calibration-file> list
 //!               session <synaWudfBioUsb.dll> <calibration-file> identify <n>
+//!               session <synaWudfBioUsb.dll> <calibration-file> enroll <uid> <finger-subtype>
 //!
 //! The calibration file is read when present and written after a calibration.
 
@@ -13,8 +14,9 @@ use std::time::Instant;
 use validity_proto::calibration::CalibrationFile;
 use validity_proto::db;
 use validity_proto::init::{self, Opened, Setup};
-use validity_proto::scanner::Identified;
+use validity_proto::scanner::{EnrollProgress, Identified};
 use validity_proto::session::UsbSession;
+use validity_proto::sid::Sid;
 use validity_proto::tls::PskKeys;
 use validity_proto::transport::OsEntropy;
 use validity_proto::usb::UsbSensor;
@@ -29,7 +31,8 @@ fn dmi(field: &str) -> String {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger_lite();
     let args: Vec<String> = std::env::args().collect();
-    let usage = "usage: session <dll> <calibration-file> list|identify <n>";
+    let usage =
+        "usage: session <dll> <calibration-file> list | identify <n> | enroll <uid> <subtype>";
     let (dll, calib_path, cmd) = match args.as_slice() {
         [_, dll, calib, cmd, ..] => (dll, Path::new(calib), cmd.as_str()),
         _ => return Err(usage.into()),
@@ -43,7 +46,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let t0 = Instant::now();
-    let mut s = UsbSession::new(UsbSensor::open()?, OsEntropy, psk.clone());
+    let mut s = UsbSession::new(
+        UsbSensor::open_wait(std::time::Duration::from_secs(5))?,
+        OsEntropy,
+        psk.clone(),
+    );
     let setup = Setup {
         blobs: &blobs,
         psk: &psk,
@@ -99,6 +106,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             println!("RESULT: {matched}/{n} matched");
+        }
+        "enroll" => {
+            let uid: u32 = args.get(4).ok_or(usage)?.parse()?;
+            let subtype: u16 = args.get(5).ok_or(usage)?.parse()?;
+            // Same SID scheme as python-validity's dbus-service.
+            let sid: Sid = format!("S-1-5-21-111111111-1111111111-1111111111-{uid}").parse()?;
+            let mut images = 0;
+            println!(">>> place the finger repeatedly until done");
+            let recid = scanner.enroll(&mut s, &blobs, &sid, subtype, |p| {
+                match p {
+                    EnrollProgress::Image(_) => {
+                        images += 1;
+                        println!("  image {images} accepted, lift and place again");
+                    }
+                    EnrollProgress::Retry(e) => println!("  try again: {e}"),
+                }
+                ControlFlow::Continue(())
+            })?;
+            println!("RESULT: enrolled finger {subtype} as record {recid} after {images} images");
         }
         _ => return Err(usage.into()),
     }

@@ -21,6 +21,23 @@ const MAX_REPLY: usize = 100 * 1024;
 /// Image data (calibration frames) arrives in one transfer of up to 1 MiB.
 const MAX_IMAGE: usize = 1024 * 1024;
 
+/// Whether `vendor_id:product_id` is one of [`SUPPORTED`].
+pub fn is_supported(vendor_id: u16, product_id: u16) -> bool {
+    SUPPORTED.contains(&(vendor_id, product_id))
+}
+
+/// The supported sensors currently on the bus, as `(vendor, product)`: empty when
+/// none is plugged in. Lets a caller tell an absent sensor from one that fails to
+/// open.
+pub fn find_supported() -> Result<Vec<(u16, u16)>, TransportError> {
+    Ok(nusb::list_devices()
+        .wait()
+        .map_err(io)?
+        .filter(|d| is_supported(d.vendor_id(), d.product_id()))
+        .map(|d| (d.vendor_id(), d.product_id()))
+        .collect())
+}
+
 pub struct UsbSensor {
     device: nusb::Device,
     out: nusb::Endpoint<Bulk, Out>,
@@ -49,7 +66,7 @@ impl UsbSensor {
         let info = nusb::list_devices()
             .wait()
             .map_err(io)?
-            .find(|d| SUPPORTED.contains(&(d.vendor_id(), d.product_id())))
+            .find(|d| is_supported(d.vendor_id(), d.product_id()))
             .ok_or_else(|| TransportError::Other("no supported sensor found".into()))?;
         let (vendor_id, product_id) = (info.vendor_id(), info.product_id());
         let device = info.open().wait().map_err(io)?;
@@ -63,6 +80,21 @@ impl UsbSensor {
             vendor_id,
             product_id,
         })
+    }
+
+    /// Like [`open`](Self::open), but waits up to `timeout` for the sensor to appear:
+    /// after a reboot (every session ends with one) it is off the bus for about half a
+    /// second and comes back at a new address.
+    pub fn open_wait(timeout: Duration) -> Result<Self, TransportError> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            match Self::open() {
+                Ok(s) => return Ok(s),
+                Err(e) if std::time::Instant::now() >= deadline => return Err(e),
+                Err(e) => log::debug!("sensor not ready ({e}), retrying"),
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 
     /// Waits up to `timeout` for an interrupt packet; `Ok(None)` on timeout.
@@ -111,4 +143,20 @@ impl Transport for UsbSensor {
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn supported_ids() {
+        assert!(is_supported(0x06cb, 0x009a));
+        assert!(is_supported(0x138a, 0x0097));
+        assert!(!is_supported(0x06cb, 0x00bd));
+        assert!(!is_supported(0x138a, 0x009a));
+        for (v, p) in SUPPORTED {
+            assert!(is_supported(v, p));
+        }
+    }
 }
