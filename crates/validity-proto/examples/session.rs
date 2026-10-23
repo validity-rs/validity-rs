@@ -13,7 +13,9 @@ use std::time::Instant;
 
 use validity_proto::calibration::CalibrationFile;
 use validity_proto::db;
+use validity_proto::fwext::Fwext;
 use validity_proto::init::{self, Opened, Setup};
+use validity_proto::scanner;
 use validity_proto::scanner::{EnrollProgress, Identified};
 use validity_proto::session::UsbSession;
 use validity_proto::sid::Sid;
@@ -46,22 +48,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let t0 = Instant::now();
-    let mut s = UsbSession::new(
-        UsbSensor::open_wait(std::time::Duration::from_secs(5))?,
-        OsEntropy,
-        psk.clone(),
-    );
-    let setup = Setup {
-        blobs: &blobs,
-        psk: &psk,
-        fwext: None,
-        calibration: stored.as_ref(),
+    // `VALIDITY_FWEXT`: the vendor firmware extension, needed after a factory reset.
+    let fwext = match std::env::var("VALIDITY_FWEXT") {
+        Ok(p) => Some(Fwext::parse(&std::fs::read(p)?)?),
+        Err(_) => None,
     };
-    let scanner = match init::open(&mut s, &setup, &mut OsEntropy)? {
-        Opened::Ready(sc) => *sc,
-        Opened::Rebooted(why) => {
-            println!("sensor rebooted ({why:?}); run again");
-            return Ok(());
+    let wait = std::time::Duration::from_secs(10);
+
+    if cmd == "reset" {
+        let mut s = UsbSession::new(UsbSensor::open_wait(wait)?, OsEntropy, psk.clone());
+        match scanner::factory_reset(&mut s, &blobs) {
+            Ok(()) | Err(validity_proto::Error::Transport(_)) => {}
+            Err(e) => return Err(e.into()),
+        }
+        let _ = std::fs::remove_file(calib_path);
+        println!("reset: flash erased, sensor rebooting; calibration file removed");
+        return Ok(());
+    }
+
+    // Pairing and firmware upload each end with a sensor reboot: reopen until ready.
+    let mut attempt = 0;
+    let (mut s, scanner) = loop {
+        attempt += 1;
+        let mut s = UsbSession::new(UsbSensor::open_wait(wait)?, OsEntropy, psk.clone());
+        let setup = Setup {
+            blobs: &blobs,
+            psk: &psk,
+            fwext: fwext.as_ref(),
+            calibration: stored.as_ref(),
+        };
+        match init::open(&mut s, &setup, &mut OsEntropy)? {
+            Opened::Ready(sc) => break (s, *sc),
+            Opened::Rebooted(why) if attempt < 4 => {
+                println!("open: sensor rebooted after {why:?}, reopening");
+                drop(s);
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            Opened::Rebooted(why) => return Err(format!("still rebooting after {why:?}").into()),
         }
     };
     println!(
