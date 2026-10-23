@@ -1,7 +1,9 @@
 //! The replay machinery on synthetic logs, written from the survivors of a
 //! mutation-testing run: the log parser, `ReplaySensor` (ordering, comparison,
-//! statistics and error messages) and the masks. The logs below are made up in
-//! python-validity's debug-log format; nothing comes from a real recording.
+//! statistics, error messages and the handshake checks) and the masks. The logs
+//! below are made up in python-validity's debug-log format, and the handshakes
+//! sign their sensor key with a test firmware key
+//! (`ReplaySensor::with_firmware_key`); nothing comes from a real recording.
 
 use std::ops::Range;
 
@@ -317,26 +319,32 @@ fn bulk_reads_are_deterministic_noise() {
     assert!(img.iter().any(|&b| b != 0));
 }
 
-/// A sensor ECDH key block (TLS flash block 6) with a valid point, signed by a
-/// made-up key instead of the firmware key.
-fn foreign_ecdh_block() -> Vec<u8> {
+/// A sensor ECDH key block (TLS flash block 6) holding a valid point, signed by
+/// `signer`.
+fn ecdh_block(signer: &SigningKey) -> Vec<u8> {
     let le = |b: &[u8]| b.iter().rev().copied().collect::<Vec<u8>>();
     let sensor = SecretKey::from_slice(&[7; 32]).unwrap().public_key();
     let p = sensor.to_sec1_point(false);
     let mut k = vec![0u8; 0x90];
     k[0x08..0x28].copy_from_slice(&le(&p.as_bytes()[1..33]));
     k[0x4c..0x6c].copy_from_slice(&le(&p.as_bytes()[33..65]));
-    let not_fw = SigningKey::from_slice(&[9; 32]).unwrap();
-    let sig: DerSignature = not_fw.sign(&k);
+    let sig: DerSignature = signer.sign(&k);
     k.extend((sig.as_bytes().len() as u32).to_le_bytes());
     k.extend(sig.as_bytes());
     k.resize(ECDH_BLOCK_LEN, 0);
     k
 }
 
-/// A TLS partition image whose ECDH block is not signed by the firmware key.
+/// The firmware key of the synthetic recordings (stands in for the vendor's).
+fn test_fw() -> SigningKey {
+    SigningKey::from_slice(&[0x5f; 32]).unwrap()
+}
+
+/// A TLS partition image whose ECDH block is not signed by the firmware key
+/// (neither the vendor's nor the test one).
 fn unsigned_tls_flash() -> Vec<u8> {
-    make_tls_flash(&[4; 0x70], &[3; CERT_LEN], &foreign_ecdh_block()).unwrap()
+    let not_fw = SigningKey::from_slice(&[9; 32]).unwrap();
+    make_tls_flash(&[4; 0x70], &[3; CERT_LEN], &ecdh_block(&not_fw)).unwrap()
 }
 
 #[test]
@@ -568,4 +576,300 @@ fn identity_lookup_needs_the_command_and_its_zero_word() {
             Err(Error::Malformed("not a user lookup"))
         ));
     }
+}
+
+// ---------------------------------------------------------------- handshakes
+
+const CERT: [u8; CERT_LEN] = [0x3c; CERT_LEN];
+
+/// TLS image with the test firmware key's signature on the sensor key.
+fn signed_tls_flash() -> Vec<u8> {
+    make_tls_flash(&[4; 0x70], &CERT, &ecdh_block(&test_fw())).unwrap()
+}
+
+/// `44000000 || record(ClientHello)`, as our channel would send it.
+fn client_hello() -> Vec<u8> {
+    let mut h = vec![0x44, 0, 0, 0];
+    h.extend(tls::record(
+        tls::CONTENT_HANDSHAKE,
+        &tls::client_hello(&[0x21; 32]),
+    ));
+    h
+}
+
+/// The Certificate message carrying `cert`.
+fn cert_msg(cert: &[u8]) -> Vec<u8> {
+    let l = (cert.len() as u16).to_be_bytes();
+    let mut body = vec![0, l[0], l[1], 0, l[0], l[1], 0xac, 0x16];
+    body.extend(cert);
+    tls::handshake_msg(0x0b, &body)
+}
+
+fn be24(n: usize) -> [u8; 3] {
+    [(n >> 16) as u8, (n >> 8) as u8, n as u8]
+}
+
+/// The second client handshake message, field by field, so each check can be
+/// broken on its own.
+#[derive(Clone)]
+struct Second {
+    record: [u8; 3],
+    cert: Vec<u8>,
+    kex_type: u8,
+    /// Length field of the ClientKeyExchange, whose body is that many bytes
+    /// starting with `point`.
+    kex_len: usize,
+    point: u8,
+    verify_type: u8,
+    /// Length field of the CertificateVerify, and its actual body length.
+    verify_len: usize,
+    verify_body: usize,
+    /// ChangeCipherSpec and the encrypted Finished record.
+    rest: Vec<u8>,
+}
+
+impl Second {
+    fn ok() -> Self {
+        let mut rest = vec![tls::CONTENT_CHANGE_CIPHER_SPEC, 3, 3, 0, 1, 1];
+        rest.extend([tls::CONTENT_HANDSHAKE, 3, 3, 0, 80]);
+        rest.extend([0x99; 80]);
+        Second {
+            record: [tls::CONTENT_HANDSHAKE, 3, 3],
+            cert: CERT.to_vec(),
+            kex_type: 0x10,
+            kex_len: 65,
+            point: 4,
+            verify_type: 0x0f,
+            verify_len: 72,
+            verify_body: 72,
+            rest,
+        }
+    }
+
+    fn bytes(&self) -> Vec<u8> {
+        let mut hs = cert_msg(&self.cert);
+        hs.push(self.kex_type);
+        hs.extend(be24(self.kex_len));
+        hs.push(self.point);
+        hs.extend(vec![0x77; self.kex_len - 1]);
+        hs.push(self.verify_type);
+        hs.extend(be24(self.verify_len));
+        hs.extend(vec![0x88; self.verify_body]);
+        let mut b = vec![0x44, 0, 0, 0];
+        b.extend(self.record);
+        b.extend((hs.len() as u16).to_be_bytes());
+        b.extend(hs);
+        b.extend(&self.rest);
+        b
+    }
+}
+
+/// A recording of the two handshake exchanges and one application command.
+fn handshake_trace(second: &Second) -> Trace {
+    Trace {
+        events: vec![
+            Event::Handshake {
+                tx: client_hello(),
+                rx: Some(vec![0x16, 3, 3]),
+            },
+            Event::Handshake {
+                tx: second.bytes(),
+                rx: Some(vec![0x14, 3, 3]),
+            },
+            Event::App {
+                tx: vec![0x01],
+                rx: Some(vec![0, 0, 9]),
+            },
+        ],
+        results: vec![],
+    }
+}
+
+fn replay(second: &Second) -> ReplaySensor {
+    ReplaySensor::new(&handshake_trace(second)).with_firmware_key(*test_fw().verifying_key())
+}
+
+#[test]
+fn a_synthetic_handshake_is_accepted() {
+    let mut r = replay(&Second::ok());
+    assert!(!r.is_open());
+    r.open_channel(&signed_tls_flash()).unwrap();
+    assert!(r.is_open());
+    assert_eq!(r.remaining(), 1);
+    // Over the open channel, application commands follow.
+    assert_eq!(r.app(&[0x01]).unwrap(), [0, 0, 9]);
+    let st = r.finish().unwrap();
+    assert_eq!(st.handshakes, 1);
+    // The ClientHello is compared whole, then the application command; of the
+    // second message, the record header and the certificate.
+    assert_eq!(st.exact, 2);
+    assert_eq!(
+        st.bytes_compared,
+        client_hello().len() + 9 + cert_msg(&CERT).len() + 1
+    );
+}
+
+#[test]
+fn the_vendor_key_is_the_default() {
+    // The same recording without the test key: the sensor key does not verify.
+    let mut r = ReplaySensor::new(&handshake_trace(&Second::ok()));
+    assert!(matches!(
+        r.open_channel(&signed_tls_flash()),
+        Err(Error::Channel(
+            validity_proto::channel::Error::BadEcdhSignature
+        ))
+    ));
+    assert_eq!(r.remaining(), 3);
+    // And a key signed by neither is refused under the test key too.
+    let mut r = replay(&Second::ok());
+    assert!(matches!(
+        r.open_channel(&unsigned_tls_flash()),
+        Err(Error::Channel(
+            validity_proto::channel::Error::BadEcdhSignature
+        ))
+    ));
+}
+
+#[test]
+fn the_client_hello_is_rebuilt_from_its_random() {
+    let mut t = handshake_trace(&Second::ok());
+    // Another cipher suite list: same random, different bytes.
+    let Event::Handshake { tx, .. } = &mut t.events[0] else {
+        unreachable!()
+    };
+    let last = tx.len() - 2;
+    tx[last] ^= 1;
+    let mut r = ReplaySensor::new(&t).with_firmware_key(*test_fw().verifying_key());
+    let m = replay_msg(r.open_channel(&signed_tls_flash()));
+    assert!(m.starts_with("event 0: command differs"), "{m}");
+    // Too short to hold a random.
+    let Event::Handshake { tx, .. } = &mut t.events[0] else {
+        unreachable!()
+    };
+    tx.truncate(46);
+    let mut r = ReplaySensor::new(&t).with_firmware_key(*test_fw().verifying_key());
+    assert!(matches!(
+        r.open_channel(&signed_tls_flash()),
+        Err(Error::Malformed("short ClientHello"))
+    ));
+}
+
+/// Opens with `second`; `Ok` or the reason it was refused.
+fn open_with(second: &Second) -> Result<(), String> {
+    let mut r = replay(second);
+    match r.open_channel(&signed_tls_flash()) {
+        Ok(()) => {
+            assert!(r.is_open());
+            Ok(())
+        }
+        Err(e) => {
+            let m = replay_msg::<()>(Err(e));
+            // The second message is not consumed, and the divergence sticks.
+            assert_eq!(r.remaining(), 2);
+            assert!(!r.is_open());
+            assert_eq!(replay_msg(r.finish()), m);
+            assert_eq!(r.stats.handshakes, 0);
+            Err(m)
+        }
+    }
+}
+
+const REFUSED: &str = "event 1: second handshake message does not carry our certificate";
+
+#[test]
+fn the_second_message_must_carry_our_certificate() {
+    let ok = Second::ok();
+    assert_eq!(open_with(&ok), Ok(()));
+    let refused = |f: &dyn Fn(&mut Second)| {
+        let mut s = ok.clone();
+        f(&mut s);
+        assert_eq!(open_with(&s), Err(REFUSED.to_string()));
+    };
+    // Another certificate, or a certificate of another length.
+    refused(&|s| s.cert[100] ^= 1);
+    refused(&|s| s.cert.push(0));
+    // The record is not a TLS 1.2 handshake record.
+    refused(&|s| s.record = [tls::CONTENT_APP_DATA, 3, 3]);
+    refused(&|s| s.record = [tls::CONTENT_HANDSHAKE, 3, 1]);
+    refused(&|s| s.record = [tls::CONTENT_HANDSHAKE, 2, 3]);
+}
+
+#[test]
+fn the_key_exchange_is_an_uncompressed_point() {
+    let ok = Second::ok();
+    let with = |f: &dyn Fn(&mut Second)| {
+        let mut s = ok.clone();
+        f(&mut s);
+        open_with(&s)
+    };
+    // python-validity drops leading zero bytes of the coordinates: up to 65 bytes.
+    assert_eq!(with(&|s| s.kex_len = 64), Ok(()));
+    assert_eq!(with(&|s| s.kex_len = 60), Ok(()));
+    assert_eq!(with(&|s| s.kex_len = 66), Err(REFUSED.into()));
+    assert_eq!(with(&|s| s.kex_type = 0x11), Err(REFUSED.into()));
+    assert_eq!(with(&|s| s.point = 2), Err(REFUSED.into()));
+}
+
+#[test]
+fn the_certificate_verify_fills_the_record() {
+    let ok = Second::ok();
+    let with = |f: &dyn Fn(&mut Second)| {
+        let mut s = ok.clone();
+        f(&mut s);
+        open_with(&s)
+    };
+    assert_eq!(with(&|s| s.verify_len = s.verify_body), Ok(()));
+    assert_eq!(with(&|s| s.verify_type = 0x0e), Err(REFUSED.into()));
+    // A byte more, or less, than its length says.
+    assert_eq!(with(&|s| s.verify_body += 1), Err(REFUSED.into()));
+    assert_eq!(with(&|s| s.verify_body -= 1), Err(REFUSED.into()));
+    // Other lengths are fine when consistent.
+    assert_eq!(
+        with(&|s| {
+            s.verify_len = 70;
+            s.verify_body = 70;
+        }),
+        Ok(())
+    );
+}
+
+#[test]
+fn the_finished_record_follows_a_change_cipher_spec() {
+    let ok = Second::ok();
+    let with = |f: &dyn Fn(&mut Second)| {
+        let mut s = ok.clone();
+        f(&mut s);
+        open_with(&s)
+    };
+    // ChangeCipherSpec, then 80 bytes of encrypted Finished: 91 bytes.
+    assert_eq!(ok.rest.len(), 91);
+    assert_eq!(
+        with(&|s| s.rest[0] = tls::CONTENT_HANDSHAKE),
+        Err(REFUSED.into())
+    );
+    assert_eq!(with(&|s| s.rest[5] = 0), Err(REFUSED.into()));
+    assert_eq!(
+        with(&|s| s.rest[6] = tls::CONTENT_APP_DATA),
+        Err(REFUSED.into())
+    );
+    assert_eq!(with(&|s| s.rest.push(0)), Err(REFUSED.into()));
+    assert_eq!(
+        with(&|s| {
+            s.rest.pop();
+        }),
+        Err(REFUSED.into())
+    );
+    assert_eq!(with(&|s| s.rest.clear()), Err(REFUSED.into()));
+}
+
+#[test]
+fn a_handshake_is_expected_where_the_recording_has_one() {
+    let mut t = handshake_trace(&Second::ok());
+    t.events[1] = Event::Interrupt(vec![1]);
+    let mut r = ReplaySensor::new(&t).with_firmware_key(*test_fw().verifying_key());
+    assert_eq!(
+        replay_msg(r.open_channel(&signed_tls_flash())),
+        "event 1: recording has interrupt 01, we did a handshake"
+    );
+    assert_eq!(r.remaining(), 2);
 }

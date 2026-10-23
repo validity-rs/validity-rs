@@ -18,6 +18,8 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
+use p256::ecdsa::VerifyingKey;
+
 use crate::channel::{firmware_key, parse_ecdh_block};
 use crate::cmd::Error;
 use crate::db::parse_identity;
@@ -234,6 +236,8 @@ pub struct ReplaySensor {
     masks: Vec<Mask>,
     /// First divergence; every later call fails with it.
     failed: Option<String>,
+    /// Key that must have signed the sensor's ECDH key (TLS flash block 6).
+    fw_key: VerifyingKey,
     pub stats: Stats,
 }
 
@@ -258,8 +262,19 @@ impl ReplaySensor {
             open: false,
             masks: Vec::new(),
             failed: None,
+            fw_key: firmware_key(),
             stats: Stats::default(),
         }
+    }
+
+    /// Replaces the firmware key that must have signed the sensor's ECDH key in
+    /// the TLS flash image given to [`Sensor::open_channel`] (by default the
+    /// vendor key of real sensors, as in [`crate::session::UsbSession`]). A test
+    /// seam: synthetic recordings sign their sensor key with their own firmware
+    /// key, so that the handshake checks can be exercised without device data.
+    pub fn with_firmware_key(mut self, key: VerifyingKey) -> Self {
+        self.fw_key = key;
+        self
     }
 
     pub fn with_mask(mut self, m: Mask) -> Self {
@@ -364,7 +379,7 @@ impl ReplaySensor {
         };
         let cert = block(3)?;
         // The real sensor's ECDH key must verify under the firmware key.
-        parse_ecdh_block(block(6)?, &firmware_key())?;
+        parse_ecdh_block(block(6)?, &self.fw_key)?;
 
         let hello = match self.next("handshake")? {
             Event::Handshake { tx, .. } => tx,
