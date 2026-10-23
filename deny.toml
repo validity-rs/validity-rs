@@ -31,6 +31,10 @@ allow = [
     "Apache-2.0",
     # subtle, via the RustCrypto stack.
     "BSD-3-Clause",
+    # unicode-ident (with MIT OR Apache-2.0), via syn: the proc-macros of
+    # serde and zbus. Permissive; its tables only live in the compiler-run
+    # macros, not in the shipped binaries.
+    "Unicode-3.0",
 ]
 # Deliberately absent: GPL, LGPL, MPL and other copyleft licences. Several
 # crates offer one as an alternative in a dual licence (r-efi lists

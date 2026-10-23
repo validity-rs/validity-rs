@@ -64,7 +64,8 @@ tests/replay/      replay tests over synthetic or anonymised traces
 ## Getting started (contributors)
 
 Requirements: Rust (stable, edition 2024), `libusb-1.0` headers (`libusb-1.0-0-dev`
-on Debian), and for hardware work a machine with one of the sensors above.
+on Debian), `dbus-daemon` (the daemon's integration tests start a private bus),
+and for hardware work a machine with one of the sensors above.
 
 ```bash
 git clone <this repo> && cd validity-rs

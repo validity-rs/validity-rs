@@ -1,0 +1,24 @@
+[package]
+name = "validity-daemon"
+description = "fprintd-compatible D-Bus service (net.reactivated.Fprint) for Synaptics/Validity match-on-chip fingerprint sensors"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+validity-proto = { path = "../validity-proto", version = "0.1.0" }
+futures-core = "0.3.34"
+nix = { version = "0.31.3", default-features = false, features = ["user"] }
+log = "0.4.34"
+nusb = "0.2.8"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = { version = "1.1.8", default-features = false, features = ["parse", "serde", "std"] }
+# zbus 6 is async only. The daemon drives it with zbus::block_on on the main
+# thread (zruntime, single-threaded); the sensor has a blocking thread of its own.
+zbus = { version = "6.1.0", default-features = false, features = ["default-rt", "proxy", "service"] }
+zruntime = { version = "0.2.1", default-features = false, features = ["runtime", "helper", "mpmc", "signal", "unblock"] }
+
+[lints]
+workspace = true
