@@ -30,6 +30,7 @@ pub enum Opened {
 }
 
 /// Inputs of [`open`] besides the sensor.
+#[derive(Debug)]
 pub struct Setup<'a> {
     pub blobs: &'a Blobs,
     /// Pre-shared keys of this host (must match the session's).

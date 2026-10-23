@@ -15,8 +15,8 @@ all-features = true
 [advisories]
 version = 2
 # Vulnerabilities, unsound and unmaintained crates are errors (the version 2
-# defaults); a yanked release is a warning, since the fix is upstream's.
-yanked = "warn"
+# defaults), and so is a yanked release: no warning is tolerated.
+yanked = "deny"
 ignore = []
 
 [licenses]
@@ -39,7 +39,7 @@ allow = [
 confidence-threshold = 0.8
 
 [bans]
-multiple-versions = "warn"
+multiple-versions = "deny"
 wildcards = "deny"
 # Workspace members may depend on each other by path without a version.
 allow-wildcard-paths = true

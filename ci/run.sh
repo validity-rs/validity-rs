@@ -2,7 +2,7 @@
 # The CI, runnable locally. GitHub Actions calls the same jobs, so a green local
 # run means a green CI run.
 #
-#   ci/run.sh                 # quick: noai gitleaks fmt clippy test
+#   ci/run.sh                 # quick: noai gitleaks fmt clippy test doc
 #   ci/run.sh all             # quick + msrv deny distro (needs docker)
 #   ci/run.sh clippy distro   # selected jobs
 #   ci/run.sh distro:fedora   # one distro
@@ -23,6 +23,9 @@ MSRV=1.99.0
 DISTROS=(debian fedora archlinux alpine)
 
 cd "$(git rev-parse --show-toplevel)"
+# No warning is tolerated: every cargo invocation, here and in the containers
+# (docker-compose.yml passes these through), turns warnings into errors.
+export RUSTFLAGS="-D warnings" RUSTDOCFLAGS="-D warnings"
 CI_TOOLS=${CI_TOOLS:-${XDG_CACHE_HOME:-$HOME/.cache}/validity-rs-ci}
 mkdir -p "$CI_TOOLS"
 
@@ -82,19 +85,20 @@ job_clippy() {
     local c='cargo clippy --workspace --all-targets -- -D warnings'
     if use_image; then in_image debian "$c"; else $c; fi
 }
+job_doc() { cargo doc --workspace --no-deps; }
 job_test() { cargo test --workspace; }
 job_msrv() {
     if rustup toolchain list 2>/dev/null | grep -q "^$MSRV"; then
         cargo "+$MSRV" check --workspace --all-targets
     else
-        docker run --rm -v "$PWD:/w" -w /w -e CARGO_TARGET_DIR=/tmp/t "rust:$MSRV-trixie" cargo check --workspace --all-targets
+        docker run --rm -v "$PWD:/w" -w /w -e CARGO_TARGET_DIR=/tmp/t -e RUSTFLAGS -e RUSTDOCFLAGS "rust:$MSRV-trixie" cargo check --workspace --all-targets
     fi
 }
 job_deny() { "$(tool_cargo_deny)" --all-features check; }
 job_audit() { "$(tool_cargo_audit)" audit --deny warnings; }
 job_distro() { local d; for d in "${@:-${DISTROS[@]}}"; do say "distro $d"; in_image "$d" cargo test --workspace; done; }
 
-QUICK=(noai gitleaks fmt clippy test)
+QUICK=(noai gitleaks fmt clippy test doc)
 ALL=("${QUICK[@]}" msrv deny distro)
 
 jobs=("$@")

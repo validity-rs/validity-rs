@@ -70,6 +70,7 @@ impl From<TransportError> for Error {
 }
 
 /// Pairing material stored in the TLS flash partition.
+#[derive(Debug)]
 pub struct TlsFlash {
     /// Host key (block 4), sealed with the host's pre-shared keys.
     pub host_key: SecretKey,
@@ -145,6 +146,17 @@ pub struct Channel {
     secure_tx: bool,
     secure_rx: bool,
     transcript: Sha256,
+}
+
+/// State only: keys and transcript stay out of logs.
+impl core::fmt::Debug for Channel {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Channel")
+            .field("keys", &self.keys.is_some())
+            .field("secure_tx", &self.secure_tx)
+            .field("secure_rx", &self.secure_rx)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Channel {

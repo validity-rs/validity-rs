@@ -32,6 +32,7 @@ pub trait Entropy {
 }
 
 /// The operating system's CSPRNG.
+#[derive(Debug, Clone, Copy, Default)]
 pub struct OsEntropy;
 
 impl Entropy for OsEntropy {

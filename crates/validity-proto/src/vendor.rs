@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 /// SHA-256 of `synaWudfBioUsb.dll` from `nz3gf07w.exe` (2160248 bytes).
 pub const DLL_SHA256: &str = "aed9f4246bbaca28776c05c169c734cae9763322b03dc00e4319320e1aa2294d";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlobRef {
     pub name: &'static str,
     pub offset: usize,
@@ -114,6 +115,22 @@ pub struct Blobs {
     pub reset_blob: Vec<u8>,
     pub db_write_enable: Vec<u8>,
     pub partition_signature: Vec<u8>,
+}
+
+/// Lengths only: the blobs are vendor material, not something to log.
+impl core::fmt::Debug for Blobs {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Blobs")
+            .field("init_hardcoded", &self.init_hardcoded.len())
+            .field(
+                "init_hardcoded_clean_slate",
+                &self.init_hardcoded_clean_slate.len(),
+            )
+            .field("reset_blob", &self.reset_blob.len())
+            .field("db_write_enable", &self.db_write_enable.len())
+            .field("partition_signature", &self.partition_signature.len())
+            .finish()
+    }
 }
 
 impl Blobs {

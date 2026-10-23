@@ -137,10 +137,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn env_logger_lite() {
     struct L(log::LevelFilter);
     impl log::Log for L {
-        fn enabled(&self, m: &log::Metadata) -> bool {
+        fn enabled(&self, m: &log::Metadata<'_>) -> bool {
             m.level() <= self.0
         }
-        fn log(&self, r: &log::Record) {
+        fn log(&self, r: &log::Record<'_>) {
             if self.enabled(r.metadata()) {
                 eprintln!("{} {}", r.level(), r.args());
             }

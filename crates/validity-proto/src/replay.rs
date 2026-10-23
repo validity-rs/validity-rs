@@ -192,12 +192,22 @@ pub fn parse_log(text: &str) -> Result<Trace, Error> {
     Ok(t)
 }
 
+/// Which bytes of a recorded command a [`Mask`] ignores, if it applies to it.
+pub type MaskRanges = Box<dyn Fn(&[u8]) -> Option<Vec<Range<usize>>>>;
+
 /// Bytes of a recorded command that are allowed to differ, with the reason.
 pub struct Mask {
     pub name: &'static str,
     /// The ranges to ignore if the mask applies to this recorded command.
-    #[allow(clippy::type_complexity)]
-    pub ranges: Box<dyn Fn(&[u8]) -> Option<Vec<Range<usize>>>>,
+    pub ranges: MaskRanges,
+}
+
+impl core::fmt::Debug for Mask {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Mask")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Comparison counters.
@@ -225,6 +235,19 @@ pub struct ReplaySensor {
     /// First divergence; every later call fails with it.
     failed: Option<String>,
     pub stats: Stats,
+}
+
+impl core::fmt::Debug for ReplaySensor {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ReplaySensor")
+            .field("events", &self.events.len())
+            .field("pos", &self.pos)
+            .field("open", &self.open)
+            .field("masks", &self.masks)
+            .field("failed", &self.failed)
+            .field("stats", &self.stats)
+            .finish()
+    }
 }
 
 impl ReplaySensor {

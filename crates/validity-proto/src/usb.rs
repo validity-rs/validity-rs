@@ -48,6 +48,16 @@ pub struct UsbSensor {
     pub product_id: u16,
 }
 
+impl core::fmt::Debug for UsbSensor {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "UsbSensor({:04x}:{:04x})",
+            self.vendor_id, self.product_id
+        )
+    }
+}
+
 fn map(e: TransferError) -> TransportError {
     match e {
         TransferError::Cancelled => TransportError::Timeout,

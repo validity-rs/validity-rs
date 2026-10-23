@@ -20,6 +20,9 @@ x-common: &common
   environment:
     CARGO_TERM_COLOR: ${CARGO_TERM_COLOR:-auto}
     CARGO_NET_RETRY: ${CARGO_NET_RETRY:-10}
+    # Set by ci/run.sh: warnings are errors in the containers too.
+    RUSTFLAGS: ${RUSTFLAGS:-}
+    RUSTDOCFLAGS: ${RUSTDOCFLAGS:-}
 
 services:
   debian:

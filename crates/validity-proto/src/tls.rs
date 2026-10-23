@@ -138,6 +138,13 @@ pub struct PskKeys {
     pub validation: [u8; 32],
 }
 
+/// Redacted: key material never reaches a log.
+impl core::fmt::Debug for PskKeys {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("PskKeys { .. }")
+    }
+}
+
 impl PskKeys {
     pub fn from_hw(product_name: &str, serial_number: &str) -> Self {
         let mut hw_key = product_name.as_bytes().to_vec();
@@ -217,6 +224,13 @@ pub struct SessionKeys {
     pub validation: [u8; 32],
     pub encryption: [u8; 32],
     pub decryption: [u8; 32],
+}
+
+/// Redacted: key material never reaches a log.
+impl core::fmt::Debug for SessionKeys {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("SessionKeys { .. }")
+    }
 }
 
 impl SessionKeys {

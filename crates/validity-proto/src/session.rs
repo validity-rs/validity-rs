@@ -94,7 +94,7 @@ impl UsbLink for UsbSensor {
 }
 
 /// Cancels a blocking [`Sensor::wait_int`] from another thread.
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct CancelHandle(Arc<AtomicBool>);
 
 impl CancelHandle {
@@ -124,6 +124,14 @@ pub struct UsbSession<L: UsbLink, E: Entropy> {
     psk: PskKeys,
     fw_key: VerifyingKey,
     cancel: CancelHandle,
+}
+
+impl<L: UsbLink, E: Entropy> core::fmt::Debug for UsbSession<L, E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("UsbSession")
+            .field("open", &self.is_open())
+            .finish_non_exhaustive()
+    }
 }
 
 impl<L: UsbLink, E: Entropy> UsbSession<L, E> {
