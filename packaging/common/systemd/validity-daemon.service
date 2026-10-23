@@ -1,0 +1,56 @@
+# validity-daemon: fprintd-compatible service (net.reactivated.Fprint) for
+# Synaptics/Validity match-on-chip fingerprint sensors.
+#
+# Hardening follows fprintd.service. The daemon keeps going on sensor errors
+# (it retries, resets the USB port, waits for the sensor to come back); it
+# exits non-zero only when it cannot serve at all (bus name taken by another
+# fprintd, bad configuration), and then is restarted a bounded number of times.
+
+[Unit]
+Description=Fingerprint authentication daemon for Synaptics/Validity sensors
+Documentation=https://github.com/validity-rs/validity-rs
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=dbus
+BusName=net.reactivated.Fprint
+ExecStart=/usr/libexec/validity-daemon
+Restart=on-failure
+RestartSec=5
+
+# Filesystem lockdown. State (calibration, the vendor DLL): /var/lib/validity.
+# Configuration: /etc/validity/validity.toml, read only.
+ProtectSystem=strict
+StateDirectory=validity
+StateDirectoryMode=0700
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+
+# Only the USB device nodes (enumeration reads /sys; the port reset is an
+# ioctl on the device node).
+DeviceAllow=char-usb_device rw
+
+# D-Bus, and netlink for USB hotplug events. No network.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+IPAddressDeny=any
+
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=true
+LockPersonality=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

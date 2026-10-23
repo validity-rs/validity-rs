@@ -1,0 +1,8 @@
+# D-Bus activation of net.reactivated.Fprint by validity-daemon. Replaces
+# fprintd's file of the same name (the packages divert it), so that
+# pam_fprintd, fprintd's tools and desktops reach this daemon.
+[D-BUS Service]
+Name=net.reactivated.Fprint
+Exec=/usr/libexec/validity-daemon
+User=root
+SystemdService=validity-daemon.service
