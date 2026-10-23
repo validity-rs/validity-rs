@@ -8,12 +8,15 @@
 # pins it, and Renovate proposes digest bumps as pull requests.
 FROM fedora:latest@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80
 
+# dbus-daemon: the daemon's integration tests start a private bus.
 RUN dnf install -y \
         cargo \
+        dbus-daemon \
         gcc \
         rust \
     && dnf clean all \
-    && rustc --version
+    && rustc --version \
+    && dbus-daemon --version | head -1
 
 WORKDIR /workspace
 CMD ["/bin/bash"]

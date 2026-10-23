@@ -10,8 +10,13 @@
 FROM rust:1.99.1-trixie@sha256:931c2c0531a8b143e044f0f3914dfe802f15bb3d1955f0b657e9359327ac2ffc
 
 # The official image installs the minimal profile, without these two.
+# dbus-daemon: the daemon's integration tests start a private bus.
 RUN rustup component add clippy rustfmt \
-    && rustc --version && cargo clippy --version && cargo fmt --version
+    && apt-get update \
+    && apt-get install -y --no-install-recommends dbus-daemon \
+    && rm -rf /var/lib/apt/lists/* \
+    && rustc --version && cargo clippy --version && cargo fmt --version \
+    && dbus-daemon --version | head -1
 
 WORKDIR /workspace
 CMD ["/bin/bash"]

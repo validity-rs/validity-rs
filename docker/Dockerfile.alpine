@@ -7,9 +7,12 @@
 # Pinned by version and digest; see Dockerfile.debian.
 FROM rust:1.99.1-alpine3.24@sha256:b1d5dd5a22a09404d3e798c0cf051b689077360374eb505fa5bb93c479693d87
 
+# dbus: dbus-daemon, for the private bus of the daemon's integration tests.
 RUN apk add --no-cache \
+        dbus \
         musl-dev \
-    && rustc --version
+    && rustc --version \
+    && dbus-daemon --version | head -1
 
 WORKDIR /workspace
 CMD ["/bin/sh"]

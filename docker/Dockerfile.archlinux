@@ -6,11 +6,14 @@
 # packages are whatever Arch ships on the day the image is built.
 FROM archlinux:base@sha256:52dfbd5afb23a220d5ee92dafcb4c788d96c026ed04179890c23adef4c897fa0
 
+# dbus: dbus-daemon, for the private bus of the daemon's integration tests.
 RUN pacman -Syu --noconfirm --needed \
+        dbus \
         gcc \
         rust \
     && pacman -Scc --noconfirm \
-    && rustc --version
+    && rustc --version \
+    && dbus-daemon --version | head -1
 
 WORKDIR /workspace
 CMD ["/bin/bash"]

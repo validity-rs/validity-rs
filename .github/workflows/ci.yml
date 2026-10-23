@@ -90,6 +90,9 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # validity-daemon's integration tests start a private bus.
+      - name: dbus-daemon
+        run: command -v dbus-daemon || { sudo apt-get update && sudo apt-get install -y --no-install-recommends dbus-daemon; }
       - run: ci/run.sh test
 
   doc:

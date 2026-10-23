@@ -86,7 +86,13 @@ job_clippy() {
     if use_image; then in_image debian "$c"; else $c; fi
 }
 job_doc() { cargo doc --workspace --no-deps; }
-job_test() { cargo test --workspace; }
+job_test() {
+    command -v dbus-daemon >/dev/null || {
+        echo "dbus-daemon is needed by validity-daemon's integration tests (Debian: apt install dbus-daemon)" >&2
+        return 1
+    }
+    cargo test --workspace
+}
 job_msrv() {
     if rustup toolchain list 2>/dev/null | grep -q "^$MSRV"; then
         cargo "+$MSRV" check --workspace --all-targets
