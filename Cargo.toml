@@ -10,10 +10,14 @@ license = "MIT"
 repository = "https://github.com/validity-rs/validity-rs"
 
 [workspace.lints.rust]
+# No warning is tolerated: a plain `cargo build/test/clippy/doc` fails on any.
+warnings = "deny"
 unsafe_code = "forbid"
 missing_debug_implementations = "deny"
-unused_must_use = "deny"
 rust_2018_idioms = { level = "deny", priority = -1 }
 
 [workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
+[workspace.lints.rustdoc]
 all = { level = "deny", priority = -1 }
