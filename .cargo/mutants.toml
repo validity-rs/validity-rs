@@ -1,0 +1,15 @@
+# cargo-mutants configuration. Every exclusion is an *equivalent* mutant: the change
+# has no observable effect, so no test can catch it. Each one is argued below; do
+# not add an entry without the same.
+exclude_re = [
+    # `while out.len() < len` vs `<=`: one extra HMAC block is computed, then the
+    # output is truncated to `len`; the result is identical.
+    "tls.rs:.*replace < with <= in prf",
+    # `n > plain.len()` vs `>=`: when n == plain.len(), `plain.len() - n` is 0, which
+    # fails the `< 0x60` check with the same BadPadding error.
+    "tls.rs:.*replace > with >= in PskKeys::open_priv_blob",
+    # `secure_tx && secure_rx` vs `||`: both flags are only ever set together within
+    # a successful handshake, and a failed one resets both, so no caller can observe
+    # one without the other.
+    "channel.rs:.*replace && with \\|\\| in Channel::is_open",
+]
