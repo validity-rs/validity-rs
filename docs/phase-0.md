@@ -46,3 +46,36 @@ stop. A port cannot do better than a working reference.
 - Private: raw captures and the full report.
 - Public (this repo): the redacted report, hashes of public vendor files, and the
   list of protocol messages observed. No serials, no keys.
+
+## Result (06cb:009a, ThinkPad T480, Debian 13)
+
+**Go.** The reference implementation worked on the first attempt:
+
+| Step | Result |
+|---|---|
+| Factory reset, pairing, firmware extension upload, calibration | OK (firmware extension 1.2, 2020-01-27) |
+| Enrolment, two fingers | OK (11 images; 5 images plus 1 failed capture) |
+| Identification, each enrolled finger, 10 attempts | 10/10 and 10/10 (one attempt matched the user's other finger) |
+| Identification, a finger that was not enrolled, 10 attempts | 0/10 accepted |
+
+Public vendor files used (Lenovo `nz3gf07w.exe`):
+
+| File | SHA-256 |
+|---|---|
+| `nz3gf07w.exe` | `c0f8fa6fe1279d4519cc8a381862455948231c45388234b5cf22aa26da6270ef` |
+| `6_07f_lenovo_mis_qm.xpfwext` | `ed2b1b5818c4072dd5c1a66e5d556888e81e3806ab0fc653164bea823ccfa2b1` |
+| `synaWudfBioUsb.dll` | `aed9f4246bbaca28776c05c169c734cae9763322b03dc00e4319320e1aa2294d` |
+
+python-validity's 06cb:009a command blobs are each the byte `0x06` followed by a
+contiguous run of `synaWudfBioUsb.dll`. validity-rs therefore extracts them from the
+vendor package by offset and checks them by hash (`crates/validity-proto/src/vendor.rs`).
+
+Observed on hardware:
+- Killing the reference in the middle of a capture left the sensor unresponsive (status
+  `e653`, then USB timeouts). De-authorising and re-authorising the USB device brought it
+  back without losing the enrolled fingers.
+- After every session the sensor reboots and is off the bus for about half a second.
+  It then returns at a new USB address.
+
+The same session (pairing from an erased sensor, enrolment, identification) was then
+repeated entirely with validity-rs.
