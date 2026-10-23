@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Runs the quick CI jobs on exactly what is pushed: a clean worktree of each
+# pushed commit, so uncommitted files in the main tree cannot hide or cause a failure.
+# Enable once per clone: git config core.hooksPath .githooks
+set -euo pipefail
+top=$(git rev-parse --show-toplevel)
+zero=0000000000000000000000000000000000000000
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+    [ "$local_sha" = "$zero" ] && continue # branch deletion
+    wt=$(mktemp -d)
+    git worktree add --detach --quiet "$wt" "$local_sha"
+    status=0
+    (cd "$wt" && CI_HOST=1 CARGO_TARGET_DIR="$top/target/pre-push" "$top/ci/run.sh") || status=$?
+    git worktree remove --force "$wt"
+    [ "$status" -eq 0 ] || { echo "pre-push: CI failed on $local_sha" >&2; exit "$status"; }
+done
