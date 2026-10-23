@@ -1,0 +1,9 @@
+[package]
+name = "validity-rs"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Driver and fprintd-compatible service for Synaptics/Validity match-on-chip fingerprint sensors"
+repository = "https://github.com/OWNER/validity-rs"
+
+[dependencies]
