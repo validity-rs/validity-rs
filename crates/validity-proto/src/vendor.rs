@@ -1,7 +1,8 @@
 //! Vendor material that cannot be redistributed: the opaque command blobs live in
 //! the Synaptics driver DLL shipped in Lenovo's package `nz3gf07w.exe`. Each blob is
 //! the command byte 0x06 followed by a contiguous run of that DLL, so only offsets,
-//! lengths and hashes are kept here (see `tools/oracle/blob_offsets.py`).
+//! lengths and hashes are kept here (see `tools/oracle/blob_offsets.py`). The vendor
+//! signature of the flash partition table is a raw run of the same DLL.
 
 use sha2::{Digest, Sha256};
 
@@ -44,6 +45,16 @@ pub const BLOBS_009A: [BlobRef; 4] = [
     },
 ];
 
+/// RSA signature of the hardcoded partition layout (python-validity
+/// `init_flash.partition_signature`), used by 06cb:009a, 138a:0097 and 138a:009d.
+/// A raw run of the DLL, without command byte.
+pub const PARTITION_SIGNATURE: BlobRef = BlobRef {
+    name: "partition_signature",
+    offset: 0x1b7100,
+    len: 256,
+    sha256: "aa67e62c9de7c7e9591fd449cc9594512c2494274f195a259350fc9f4d4cc108",
+};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     DllMismatch,
@@ -85,12 +96,24 @@ pub fn extract(dll: &[u8], refs: &[BlobRef]) -> Result<Vec<Vec<u8>>, Error> {
         .collect()
 }
 
-/// The 06cb:009a command blobs.
+/// Extracts and verifies a raw run of the DLL (no command byte).
+pub fn extract_raw(dll: &[u8], r: &BlobRef) -> Result<Vec<u8>, Error> {
+    let run = dll
+        .get(r.offset..r.offset + r.len)
+        .ok_or(Error::OutOfRange(r.name))?;
+    if hex(&Sha256::digest(run)) != r.sha256 {
+        return Err(Error::BlobMismatch(r.name));
+    }
+    Ok(run.to_vec())
+}
+
+/// The 06cb:009a command blobs and the partition table signature.
 pub struct Blobs {
     pub init_hardcoded: Vec<u8>,
     pub init_hardcoded_clean_slate: Vec<u8>,
     pub reset_blob: Vec<u8>,
     pub db_write_enable: Vec<u8>,
+    pub partition_signature: Vec<u8>,
 }
 
 impl Blobs {
@@ -105,6 +128,7 @@ impl Blobs {
             init_hardcoded_clean_slate: next(),
             reset_blob: next(),
             db_write_enable: next(),
+            partition_signature: extract_raw(dll, &PARTITION_SIGNATURE)?,
         })
     }
 }
@@ -143,6 +167,20 @@ mod tests {
         }];
         assert_eq!(extract(&dll, &refs), Err(Error::OutOfRange("t")));
         assert!(matches!(Blobs::from_dll(&dll), Err(Error::DllMismatch)));
+
+        let raw = hex(&Sha256::digest(&dll[100..140]));
+        let raw: &'static str = Box::leak(raw.into_boxed_str());
+        let r = BlobRef {
+            name: "r",
+            offset: 100,
+            len: 40,
+            sha256: raw,
+        };
+        assert_eq!(extract_raw(&dll, &r).unwrap(), &dll[100..140]);
+        let r = BlobRef { offset: 99, ..r };
+        assert_eq!(extract_raw(&dll, &r), Err(Error::BlobMismatch("r")));
+        let r = BlobRef { offset: 4090, ..r };
+        assert_eq!(extract_raw(&dll, &r), Err(Error::OutOfRange("r")));
     }
 
     /// Runs against the real DLL when `VALIDITY_DLL` points at it.
@@ -154,5 +192,6 @@ mod tests {
         };
         let b = Blobs::from_dll(&std::fs::read(path).unwrap()).unwrap();
         assert_eq!(b.reset_blob.len(), 12037);
+        assert_eq!(b.partition_signature.len(), 256);
     }
 }

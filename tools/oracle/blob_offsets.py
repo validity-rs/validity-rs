@@ -4,9 +4,11 @@
 Usage: blob_offsets.py <path-to-python-validity> <synaWudfBioUsb.dll>
 Each blob is a 0x06 command byte followed by a contiguous run of the DLL. Prints the
 offset, length and SHA-256 of each, so validity-rs can extract them at install time
-instead of shipping them.
+instead of shipping them. The partition table signature (init_flash.py) is a raw run,
+without command byte, located the same way.
 """
 import hashlib
+import re
 import sys
 import types
 
@@ -23,3 +25,11 @@ for name in ('init_hardcoded', 'init_hardcoded_clean_slate', 'reset_blob', 'db_w
     off = dll.find(blob[1:])
     assert off >= 0 and dll.find(blob[1:], off + 1) < 0, name  # present exactly once
     print(name, hex(off), len(blob) - 1, hashlib.sha256(blob).hexdigest())
+
+# init_flash.py imports the USB stack; read the constant from its source instead.
+src = open(sys.argv[1] + '/validitysensor/init_flash.py').read()
+m = re.search(r"^partition_signature = unhex\('''([0-9a-f\s]+)'''\)", src, re.M)
+sig = bytes.fromhex(''.join(m.group(1).split()))
+off = dll.find(sig)
+assert off >= 0 and dll.find(sig, off + 1) < 0, 'partition_signature'
+print('partition_signature', hex(off), len(sig), hashlib.sha256(sig).hexdigest())
