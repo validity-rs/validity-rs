@@ -1,1 +1,5 @@
 /target
+
+# Local-only notes (test machine access, private context) — never commit
+/local/
+CLAUDE.md
