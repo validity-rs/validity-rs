@@ -1,0 +1,41 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    "docker:pinDigests"
+  ],
+  "enabledManagers": [
+    "cargo",
+    "github-actions",
+    "dockerfile"
+  ],
+  "lockFileMaintenance": {
+    "enabled": true
+  },
+  "packageRules": [
+    {
+      "description": "The Debian image (fmt, clippy, tests) and the Alpine image carry the same Rust release; bump them in one pull request so the toolchains never diverge.",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "matchPackageNames": [
+        "rust"
+      ],
+      "groupName": "Rust toolchain images"
+    },
+    {
+      "description": "The MSRV job's toolchain input is the workspace's rust-version, not a dependency to keep current: it moves only together with rust-version in Cargo.toml.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchDatasources": [
+        "rust-version"
+      ],
+      "matchDepTypes": [
+        "uses-with"
+      ],
+      "enabled": false
+    }
+  ]
+}

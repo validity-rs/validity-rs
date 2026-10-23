@@ -1,0 +1,43 @@
+name: Security audit
+
+# Scheduled. A change to the dependencies is already checked by the Cargo Deny
+# job in ci.yml, advisories included. What that job cannot do is notice an
+# advisory published against a Cargo.lock nobody has touched; this does.
+# A failed scheduled run notifies the repository's maintainers.
+on:
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: RustSec audit
+    runs-on: ubuntu-latest
+    env:
+      # Bump both together; the digest is the release's
+      # cargo-audit-x86_64-unknown-linux-musl-v<version>.tgz.
+      CARGO_AUDIT_VERSION: "0.22.2"
+      CARGO_AUDIT_SHA256: "7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The release binary rather than rustsec/audit-check: its latest release
+      # (v2.0.0) still declares the deprecated node20 runtime, and it needs
+      # write access to issues and checks, where a failed run already notifies.
+      - name: Install cargo-audit
+        run: |
+          set -euo pipefail
+          name="cargo-audit-x86_64-unknown-linux-musl-v${CARGO_AUDIT_VERSION}"
+          curl -fsSL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/$name.tgz" \
+            "https://github.com/rustsec/rustsec/releases/download/cargo-audit/v${CARGO_AUDIT_VERSION}/${name}.tgz"
+          echo "${CARGO_AUDIT_SHA256}  $RUNNER_TEMP/$name.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$name.tgz" -C "$RUNNER_TEMP" --strip-components=1 "$name/cargo-audit"
+          "$RUNNER_TEMP/cargo-audit" --version
+      # Warnings (unmaintained, unsound, yanked) fail the run too: on a
+      # schedule they are news, and nothing else would surface them.
+      - name: Audit Cargo.lock against the RustSec advisory database
+        run: '"$RUNNER_TEMP/cargo-audit" audit --deny warnings'

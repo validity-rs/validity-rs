@@ -1,0 +1,16 @@
+# Arch Linux with Arch's own Rust.
+#
+# Arch packages each Rust release within days, so the distro toolchain is
+# tested here. Arch is rolling and does not support partial upgrades, so the
+# install upgrades the whole system: the digest pins the starting point, the
+# packages are whatever Arch ships on the day the image is built.
+FROM archlinux:base@sha256:52dfbd5afb23a220d5ee92dafcb4c788d96c026ed04179890c23adef4c897fa0
+
+RUN pacman -Syu --noconfirm --needed \
+        gcc \
+        rust \
+    && pacman -Scc --noconfirm \
+    && rustc --version
+
+WORKDIR /workspace
+CMD ["/bin/bash"]

@@ -1,0 +1,54 @@
+# cargo-deny: licences, bans, advisories and sources of the dependency graph.
+# CI runs `cargo deny --all-features check`; run the same locally.
+
+[graph]
+# The driver and the service only exist on Linux. Without this, crates that
+# are only compiled for Windows, macOS or wasm would be checked (and would
+# have to be licence-approved) although nothing here ever builds them.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+]
+all-features = true
+
+[advisories]
+version = 2
+# Vulnerabilities, unsound and unmaintained crates are errors (the version 2
+# defaults); a yanked release is a warning, since the fix is upstream's.
+yanked = "warn"
+ignore = []
+
+[licenses]
+version = 2
+# Exactly what the graph uses today, so that a crate under a new licence is a
+# decision recorded here rather than something a broad allow list lets
+# through. Check with `cargo deny list`. Every entry must allow the crate to
+# be redistributed inside an MIT-licensed project.
+allow = [
+    # Nearly every crate, and this project.
+    "MIT",
+    "Apache-2.0",
+    # subtle, via the RustCrypto stack.
+    "BSD-3-Clause",
+]
+# Deliberately absent: GPL, LGPL, MPL and other copyleft licences. Several
+# crates offer one as an alternative in a dual licence (r-efi lists
+# LGPL-2.1-or-later beside MIT and Apache-2.0); they are taken under the
+# permissive half.
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace members may depend on each other by path without a version.
+allow-wildcard-paths = true
+highlight = "all"
+
+[sources]
+# Only crates.io. A git or alternative-registry dependency is a supply-chain
+# decision, not a warning.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

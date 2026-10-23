@@ -1,0 +1,184 @@
+name: CI
+
+# Pushes and pull requests are the gate. The weekly run on the default branch
+# is the one that notices drift nobody committed: a new advisory, a distro
+# package update, a registry change.
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+# A newer push supersedes the run in flight for the same ref; scheduled and
+# manual runs are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Ride out transient crates.io blips instead of failing the job. Both are
+  # forwarded into the containers by docker-compose.yml.
+  CARGO_NET_RETRY: "10"
+
+jobs:
+  no-ai-traces:
+    name: No AI traces
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The script checks every commit, so it needs all of them.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check commit messages, added lines, paths and pull request text
+        env:
+          # Passed through the environment, never interpolated into the shell.
+          # A bot's title and body are skipped: Renovate pastes upstream
+          # release notes, which this project did not write. Its commits and
+          # diff are still checked.
+          PR_TITLE: ${{ github.event.pull_request.user.type != 'Bot' && github.event.pull_request.title || '' }}
+          PR_BODY: ${{ github.event.pull_request.user.type != 'Bot' && github.event.pull_request.body || '' }}
+        run: bash .github/scripts/no-ai-traces.sh HEAD
+
+  gitleaks:
+    name: Gitleaks (full history)
+    runs-on: ubuntu-latest
+    env:
+      # Bump both together; the digest is the release's
+      # gitleaks_<version>_linux_x64.tar.gz.
+      GITLEAKS_VERSION: "8.30.1"
+      GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The release binary rather than gitleaks-action: the action needs a
+      # paid licence key for repositories owned by an organisation.
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" version
+      # Reviewed false positives are listed by fingerprint in .gitleaksignore.
+      - name: Scan every commit
+        run: '"$RUNNER_TEMP/gitleaks" git --redact --verbose --exit-code 1 --no-banner .'
+
+  # rustfmt and clippy run in the pinned Debian image, not on the runner's
+  # toolchain: both change between Rust releases, and this way the lint set CI
+  # applies is the one `docker compose run --rm debian ...` gives a
+  # contributor, and it only moves through a reviewed image bump.
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build debian image
+        run: |
+          for attempt in 1 2 3; do
+            docker compose build debian && exit 0
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::debian image build attempt $attempt failed (likely a registry timeout); retrying in 30s"
+              sleep 30
+            fi
+          done
+          exit 1
+      - run: docker compose run --rm -T debian sh -c 'rustc --version && cargo fmt --all --check'
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build debian image
+        run: |
+          for attempt in 1 2 3; do
+            docker compose build debian && exit 0
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::debian image build attempt $attempt failed (likely a registry timeout); retrying in 30s"
+              sleep 30
+            fi
+          done
+          exit 1
+      - run: docker compose run --rm -T debian sh -c 'rustc --version && cargo clippy --workspace --all-targets -- -D warnings'
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The runner image's preinstalled Rust can lag a release behind the
+      # workspace's rust-version; install current stable explicitly.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo test --workspace
+
+  msrv:
+    # Keep in step with rust-version in Cargo.toml.
+    name: MSRV (1.99.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: "1.99.0"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo check --workspace --all-targets
+
+  distro:
+    name: Test (${{ matrix.distro }})
+    runs-on: ubuntu-latest
+    strategy:
+      # One distro's registry timeout must not cancel the others.
+      fail-fast: false
+      matrix:
+        distro: [debian, fedora, archlinux, alpine]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Base images and packages come from public registries at build time;
+      # retry to ride out their transient timeouts. A test failure is not
+      # retried.
+      - name: Build ${{ matrix.distro }} image
+        run: |
+          for attempt in 1 2 3; do
+            docker compose build "${{ matrix.distro }}" && exit 0
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::${{ matrix.distro }} image build attempt $attempt failed (likely a registry timeout); retrying in 30s"
+              sleep 30
+            fi
+          done
+          exit 1
+      - name: Test on ${{ matrix.distro }}
+        run: docker compose run --rm -T "${{ matrix.distro }}" sh -c 'rustc --version && cargo test --workspace'
+
+  deny:
+    name: Cargo Deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Runs `cargo deny --all-features check` against deny.toml: advisories,
+      # bans, licences, sources.
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1

@@ -1,0 +1,17 @@
+# Debian 13 (trixie) with the Rust toolchain from the official image.
+#
+# This image is where CI runs rustfmt and clippy, and it is the Debian entry
+# of the distro test matrix. Debian's own rustc is far older than the
+# workspace's rust-version, hence the official image rather than apt's rustc.
+#
+# Pinned by version and digest: an unpinned tag would land a new toolchain,
+# and with it new clippy lints, with no pull request to show for it. Renovate
+# proposes the bumps (digest and version) as pull requests.
+FROM rust:1.99.1-trixie@sha256:931c2c0531a8b143e044f0f3914dfe802f15bb3d1955f0b657e9359327ac2ffc
+
+# The official image installs the minimal profile, without these two.
+RUN rustup component add clippy rustfmt \
+    && rustc --version && cargo clippy --version && cargo fmt --version
+
+WORKDIR /workspace
+CMD ["/bin/bash"]

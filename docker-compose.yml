@@ -1,0 +1,70 @@
+# Containers for the checks CI runs, so that a contributor runs the same ones.
+#
+#   docker compose build                         # build every image
+#   docker compose run --rm debian cargo fmt --all --check
+#   docker compose run --rm debian cargo clippy --workspace --all-targets -- -D warnings
+#   docker compose run --rm fedora cargo test --workspace
+#   docker compose run --rm debian               # shell
+#
+# The build context is docker/ alone: the images copy nothing from the tree,
+# and the repository (target/, local notes) is not sent to the daemon. The
+# tree is mounted at run time instead.
+#
+# Each distro gets its own target directory in a named volume (different libc
+# and toolchains make different binaries, and the host's target/ stays free of
+# root-owned files). Downloaded crates are shared: they do not depend on the
+# platform.
+
+x-common: &common
+  working_dir: /workspace
+  environment:
+    CARGO_TERM_COLOR: ${CARGO_TERM_COLOR:-auto}
+    CARGO_NET_RETRY: ${CARGO_NET_RETRY:-10}
+
+services:
+  debian:
+    <<: *common
+    build:
+      context: docker
+      dockerfile: Dockerfile.debian
+    volumes:
+      - .:/workspace
+      - cargo-registry:/usr/local/cargo/registry
+      - target-debian:/workspace/target
+
+  alpine:
+    <<: *common
+    build:
+      context: docker
+      dockerfile: Dockerfile.alpine
+    volumes:
+      - .:/workspace
+      - cargo-registry:/usr/local/cargo/registry
+      - target-alpine:/workspace/target
+
+  fedora:
+    <<: *common
+    build:
+      context: docker
+      dockerfile: Dockerfile.fedora
+    volumes:
+      - .:/workspace
+      - cargo-registry:/root/.cargo/registry
+      - target-fedora:/workspace/target
+
+  archlinux:
+    <<: *common
+    build:
+      context: docker
+      dockerfile: Dockerfile.archlinux
+    volumes:
+      - .:/workspace
+      - cargo-registry:/root/.cargo/registry
+      - target-archlinux:/workspace/target
+
+volumes:
+  cargo-registry:
+  target-debian:
+  target-alpine:
+  target-fedora:
+  target-archlinux:

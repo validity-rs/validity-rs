@@ -1,0 +1,15 @@
+# Alpine 3.24 (musl libc) with the Rust toolchain from the official image.
+#
+# The musl entry of the distro test matrix. The image targets
+# x86_64-unknown-linux-musl with crt-static, so binaries link statically.
+# The USB transport is nusb (pure Rust): no libusb needed anywhere.
+#
+# Pinned by version and digest; see Dockerfile.debian.
+FROM rust:1.99.1-alpine3.24@sha256:b1d5dd5a22a09404d3e798c0cf051b689077360374eb505fa5bb93c479693d87
+
+RUN apk add --no-cache \
+        musl-dev \
+    && rustc --version
+
+WORKDIR /workspace
+CMD ["/bin/sh"]

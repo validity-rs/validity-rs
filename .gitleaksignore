@@ -1,0 +1,21 @@
+# Reviewed gitleaks findings that are not secrets. One fingerprint per line
+# (commit:path:rule:line), so each entry covers exactly one finding in one
+# commit: a new or changed vector file is flagged again and needs its own
+# review.
+#
+# crates/validity-proto/tests/vectors/tls.json (commit 207b08a): synthetic
+# test vectors. Every key, random and hardware id there is derived from
+# sha256("<tag>-<n>") of fixed tags, from the made-up ids "ThinkPad Synthetic"
+# and "SYNTH0001", or from python-validity's public constants; see
+# tools/oracle/gen_tls_vectors.py. No device data.
+207b08a81215d07d14719a838544126cc715e0f7:crates/validity-proto/tests/vectors/tls.json:generic-api-key:22
+207b08a81215d07d14719a838544126cc715e0f7:crates/validity-proto/tests/vectors/tls.json:generic-api-key:25
+207b08a81215d07d14719a838544126cc715e0f7:crates/validity-proto/tests/vectors/tls.json:generic-api-key:26
+207b08a81215d07d14719a838544126cc715e0f7:crates/validity-proto/tests/vectors/tls.json:generic-api-key:28
+207b08a81215d07d14719a838544126cc715e0f7:crates/validity-proto/tests/vectors/tls.json:generic-api-key:32
+207b08a81215d07d14719a838544126cc715e0f7:crates/validity-proto/tests/vectors/tls.json:generic-api-key:33
+207b08a81215d07d14719a838544126cc715e0f7:crates/validity-proto/tests/vectors/tls.json:generic-api-key:71
+207b08a81215d07d14719a838544126cc715e0f7:crates/validity-proto/tests/vectors/tls.json:generic-api-key:77
+207b08a81215d07d14719a838544126cc715e0f7:crates/validity-proto/tests/vectors/tls.json:generic-api-key:83
+207b08a81215d07d14719a838544126cc715e0f7:crates/validity-proto/tests/vectors/tls.json:generic-api-key:92
+207b08a81215d07d14719a838544126cc715e0f7:crates/validity-proto/tests/vectors/tls.json:generic-api-key:95

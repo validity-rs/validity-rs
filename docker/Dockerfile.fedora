@@ -1,0 +1,19 @@
+# Fedora (latest stable release: 44 when pinned) with Fedora's own Rust.
+#
+# Fedora ships current Rust releases as updates to its stable release, so the
+# distro toolchain is tested here rather than a rustup one. If a rust-version
+# bump outpaces Fedora's package, this job is the one that says so.
+#
+# `latest` always names the current stable release (not rawhide); the digest
+# pins it, and Renovate proposes digest bumps as pull requests.
+FROM fedora:latest@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80
+
+RUN dnf install -y \
+        cargo \
+        gcc \
+        rust \
+    && dnf clean all \
+    && rustc --version
+
+WORKDIR /workspace
+CMD ["/bin/bash"]
