@@ -17,6 +17,7 @@ pub mod tables;
 pub mod timeslot;
 pub mod tls;
 pub mod transport;
+#[cfg(feature = "usb")]
 pub mod usb;
 pub mod vendor;
 

@@ -76,8 +76,19 @@ services:
       - cargo-registry:/usr/local/cargo/registry
       - target-e2e:/workspace/target
 
+  fuzz:
+    <<: *common
+    build:
+      context: docker
+      dockerfile: Dockerfile.fuzz
+    volumes:
+      - .:/workspace
+      - cargo-registry:/usr/local/cargo/registry
+      - target-fuzz:/workspace/fuzz/target
+
 volumes:
   cargo-registry:
+  target-fuzz:
   target-debian:
   target-alpine:
   target-fedora:

@@ -14,6 +14,7 @@ use crate::channel::{self, Channel, TlsFlash, firmware_key};
 use crate::cmd::Error;
 use crate::tls::{self, PskKeys};
 use crate::transport::{Entropy, Transport, TransportError};
+#[cfg(feature = "usb")]
 use crate::usb::UsbSensor;
 
 pub trait Sensor {
@@ -83,6 +84,7 @@ pub trait UsbLink: Transport {
     fn bulk_82(&mut self, timeout: Duration) -> Result<Vec<u8>, TransportError>;
 }
 
+#[cfg(feature = "usb")]
 impl UsbLink for UsbSensor {
     fn interrupt(&mut self, timeout: Duration) -> Result<Option<Vec<u8>>, TransportError> {
         self.wait_int(timeout)

@@ -45,6 +45,17 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.user.type != 'Bot' && github.event.pull_request.body || '' }}
         run: ci/run.sh noai
 
+  zizmor:
+    name: Workflow security (zizmor)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: ci/run.sh zizmor
+        env:
+          CI_TOOLS: ${{ runner.temp }}
+
   gitleaks:
     name: Gitleaks (full history)
     runs-on: ubuntu-latest
@@ -84,12 +95,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # The runner image's preinstalled Rust can lag a release behind the
-      # workspace's rust-version; install current stable explicitly.
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # validity-daemon's integration tests start a private bus.
       - name: dbus-daemon
         run: command -v dbus-daemon || { sudo apt-get update && sudo apt-get install -y --no-install-recommends dbus-daemon; }
@@ -102,11 +107,32 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: ci/run.sh doc
+
+  nousb:
+    name: Protocol without USB
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: ci/run.sh nousb
+
+  fuzz:
+    name: Fuzz (${{ github.event_name == 'schedule' && '10 min' || '30 s' }} per target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: ci/run.sh fuzz
+        env:
+          FUZZ_SECONDS: ${{ github.event_name == 'schedule' && '600' || '30' }}
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts
 
   msrv:
     # Keep in step with rust-version in Cargo.toml.
@@ -116,10 +142,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        with:
-          toolchain: "1.99.0"
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: ci/run.sh msrv
 
   distro:
@@ -134,7 +156,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: ci/run.sh "distro:${{ matrix.distro }}"
+      # Through the environment, not interpolated into the script (zizmor: template-injection).
+      - run: ci/run.sh "distro:$DISTRO"
+        env:
+          DISTRO: ${{ matrix.distro }}
 
   e2e:
     # The daemon with the emulated sensor on a system bus with polkit, driven

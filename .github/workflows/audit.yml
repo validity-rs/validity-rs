@@ -9,6 +9,11 @@ on:
     - cron: "41 5 * * *"
   workflow_dispatch:
 
+# One audit at a time; a manual run never cancels the scheduled one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 

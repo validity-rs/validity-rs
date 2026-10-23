@@ -1,0 +1,11 @@
+# Debian 13 (trixie) with a nightly Rust toolchain, for cargo-fuzz (libFuzzer needs
+# nightly's sanitizer flags). Pinned by digest like the other images; Renovate
+# proposes bumps.
+FROM rustlang/rust:nightly-trixie@sha256:20a455c8d04e4096f1fb0115b3efefc0142152a40bfd0e978f9f7d3bce339fa4
+
+# Keep in step with CARGO_FUZZ_VERSION in ci/run.sh.
+RUN cargo install --locked cargo-fuzz --version 0.13.2 \
+    && rustc --version && cargo fuzz --version
+
+WORKDIR /workspace
+CMD ["/bin/bash"]

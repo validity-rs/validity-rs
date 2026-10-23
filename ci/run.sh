@@ -16,10 +16,14 @@ GITLEAKS_VERSION=8.30.1
 GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
 CARGO_DENY_VERSION=0.20.2
 CARGO_DENY_SHA256=9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+ZIZMOR_VERSION=1.31.1
+ZIZMOR_SHA256=d185f726bdaf92df78273217dfdd24ebcd6b0ef48cf3ce776ff5762b6e138c99
 CARGO_AUDIT_VERSION=0.22.2
 CARGO_AUDIT_SHA256=7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428
 # Keep in step with rust-version in Cargo.toml.
 MSRV=1.99.0
+# rust:1.99.0-trixie (Debian 13), pinned.
+MSRV_IMAGE_DIGEST=sha256:81015672d6939b0265f09adf96d5de125482bb1330106076956b0518e74edc90
 DISTROS=(debian fedora archlinux alpine)
 
 cd "$(git rev-parse --show-toplevel)"
@@ -55,6 +59,16 @@ tool_cargo_deny() {
     echo "$CI_TOOLS/$n/cargo-deny"
 }
 
+tool_zizmor() {
+    local a=zizmor-x86_64-unknown-linux-gnu.tar.gz
+    fetch "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/$a" "$ZIZMOR_SHA256" "zizmor-$ZIZMOR_VERSION.tar.gz"
+    [ -x "$CI_TOOLS/zizmor-$ZIZMOR_VERSION" ] || {
+        tar -xzf "$CI_TOOLS/zizmor-$ZIZMOR_VERSION.tar.gz" -C "$CI_TOOLS" zizmor
+        mv "$CI_TOOLS/zizmor" "$CI_TOOLS/zizmor-$ZIZMOR_VERSION"
+    }
+    echo "$CI_TOOLS/zizmor-$ZIZMOR_VERSION"
+}
+
 tool_cargo_audit() {
     local n="cargo-audit-x86_64-unknown-linux-musl-v${CARGO_AUDIT_VERSION}"
     fetch "https://github.com/rustsec/rustsec/releases/download/cargo-audit/v${CARGO_AUDIT_VERSION}/$n.tgz" "$CARGO_AUDIT_SHA256" "$n.tgz"
@@ -75,6 +89,8 @@ build_image() {
 in_image() { local img=$1; shift; build_image "$img" && docker compose run --rm -T "$img" sh -c "rustc --version && $*"; }
 
 job_noai() { bash .github/scripts/no-ai-traces.sh HEAD; }
+# Every finding fails, informational ones included.
+job_zizmor() { "$(tool_zizmor)" --offline --persona=pedantic --min-severity=unknown .github/workflows; }
 job_gitleaks() { "$(tool_gitleaks)" git --redact --exit-code 1 --no-banner .; }
 # fmt and clippy use the pinned Debian image when docker is there, so the lint set
 # only moves with a reviewed image bump. CI_HOST=1 (the pre-push hook) uses the
@@ -85,8 +101,11 @@ job_clippy() {
     local c='cargo clippy --workspace --all-targets -- -D warnings'
     if use_image; then in_image debian "$c"; else $c; fi
 }
-job_doc() { cargo doc --workspace --no-deps; }
+job_doc() { if use_image; then in_image debian cargo doc --workspace --no-deps; else cargo doc --workspace --no-deps; fi; }
+# Tests, docs and the no-USB build run in the pinned Debian image when docker is
+# there (CI always), on the host toolchain otherwise or with CI_HOST=1.
 job_test() {
+    if use_image; then in_image debian cargo test --workspace; return; fi
     command -v dbus-daemon >/dev/null || {
         echo "dbus-daemon is needed by validity-daemon's integration tests (Debian: apt install dbus-daemon)" >&2
         return 1
@@ -94,10 +113,11 @@ job_test() {
     cargo test --workspace
 }
 job_msrv() {
-    if rustup toolchain list 2>/dev/null | grep -q "^$MSRV"; then
+    if [ -n "${CI_HOST:-}" ] && rustup toolchain list 2>/dev/null | grep -q "^$MSRV"; then
         cargo "+$MSRV" check --workspace --all-targets
     else
-        docker run --rm -v "$PWD:/w" -w /w -e CARGO_TARGET_DIR=/tmp/t -e RUSTFLAGS -e RUSTDOCFLAGS "rust:$MSRV-trixie" cargo check --workspace --all-targets
+        docker run --rm -v "$PWD:/w" -w /w -e CARGO_TARGET_DIR=/tmp/t -e RUSTFLAGS -e RUSTDOCFLAGS \
+            "rust:$MSRV-trixie@$MSRV_IMAGE_DIGEST" cargo check --workspace --all-targets
     fi
 }
 job_deny() { "$(tool_cargo_deny)" --all-features check; }
@@ -105,10 +125,30 @@ job_audit() { "$(tool_cargo_audit)" audit --deny warnings; }
 job_distro() { local d; for d in "${@:-${DISTROS[@]}}"; do say "distro $d"; in_image "$d" cargo test --workspace; done; }
 # The daemon with the emulated sensor behind a system bus and polkit, driven by
 # fprintd's own clients and pam_fprintd (docker/Dockerfile.e2e, ci/e2e/run.sh).
+# The protocol crate must build without its USB transport (that is what fuzzing uses).
+job_nousb() {
+    local c='cargo check -p validity-proto --no-default-features --all-targets'
+    if use_image; then in_image debian "$c"; else $c; fi
+}
+# Every fuzz target, FUZZ_SECONDS each (default 30); any crash, timeout or OOM fails.
+# Needs a nightly toolchain and cargo-fuzz.
+# Every fuzz target, FUZZ_SECONDS each (default 30); a crash, timeout or OOM fails.
+# Runs in the Debian nightly image (docker/Dockerfile.fuzz), or on a host with
+# nightly and cargo-fuzz when CI_HOST=1.
+job_fuzz() {
+    # shellcheck disable=SC2016 # expanded by the inner shell, inside the container
+    local loop='cd fuzz && for t in $(cargo +nightly fuzz list); do echo "== fuzz $t (${FUZZ_SECONDS}s)" && cargo +nightly fuzz run "$t" -j 2 -- -max_total_time="$FUZZ_SECONDS" -rss_limit_mb=2048 -timeout=5 || exit 1; done'
+    export FUZZ_SECONDS=${FUZZ_SECONDS:-30}
+    if use_image; then
+        build_image fuzz && docker compose run --rm -T -e FUZZ_SECONDS fuzz sh -c "$loop"
+    else
+        sh -c "$loop"
+    fi
+}
 job_e2e() { in_image e2e ci/e2e/run.sh; }
 
-QUICK=(noai gitleaks fmt clippy test doc)
-ALL=("${QUICK[@]}" msrv deny distro e2e)
+QUICK=(noai zizmor gitleaks fmt clippy test doc nousb)
+ALL=("${QUICK[@]}" msrv deny distro e2e fuzz)
 
 jobs=("$@")
 [ ${#jobs[@]} -eq 0 ] && jobs=("${QUICK[@]}")

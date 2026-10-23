@@ -1,0 +1,55 @@
+# Fuzz targets for every parser of data that comes from the sensor or from disk.
+# Not a workspace member: it needs nightly and cargo-fuzz (`cargo +nightly fuzz run <target>`).
+[package]
+name = "validity-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+p256 = "0.14.0"
+# Without the USB transport: the targets exercise the protocol, not nusb
+# (see https://github.com/kevinmehall/nusb/issues/241).
+validity-proto = { path = "../crates/validity-proto", default-features = false }
+
+[workspace]
+
+# Same rule as the main workspace: no warning is tolerated.
+[lints.rust]
+warnings = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+
+[[bin]]
+name = "parsers"
+path = "fuzz_targets/parsers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "records"
+path = "fuzz_targets/records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tls_flash"
+path = "fuzz_targets/tls_flash.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "handshake"
+path = "fuzz_targets/handshake.rs"
+test = false
+doc = false
+bench = false

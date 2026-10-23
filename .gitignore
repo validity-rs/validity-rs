@@ -3,3 +3,9 @@
 # Local-only notes (test machine access, private context) — never commit
 /local/
 CLAUDE.md
+
+# Fuzzing: build output, generated corpus and crash artifacts
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/fuzz/coverage/
