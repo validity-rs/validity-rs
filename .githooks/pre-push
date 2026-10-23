@@ -10,7 +10,8 @@ while read -r _local_ref local_sha _remote_ref _remote_sha; do
     wt=$(mktemp -d)
     git worktree add --detach --quiet "$wt" "$local_sha"
     status=0
-    (cd "$wt" && CI_HOST=1 CARGO_TARGET_DIR="$top/target/pre-push" "$top/ci/run.sh") || status=$?
+    # The pushed commit's own ci/run.sh, not the working tree's.
+    (cd "$wt" && CI_HOST=1 CARGO_TARGET_DIR="$top/target/pre-push" ./ci/run.sh) || status=$?
     git worktree remove --force "$wt"
     [ "$status" -eq 0 ] || { echo "pre-push: CI failed on $local_sha" >&2; exit "$status"; }
 done
