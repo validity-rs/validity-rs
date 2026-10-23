@@ -88,11 +88,8 @@ impl UsbLink for UsbSensor {
         self.wait_int(timeout)
     }
 
-    fn bulk_82(&mut self, _timeout: Duration) -> Result<Vec<u8>, TransportError> {
-        // `usb::UsbSensor` does not claim endpoint 0x82 yet; calibration needs it.
-        Err(TransportError::Other(
-            "bulk endpoint 0x82 is not exposed by usb::UsbSensor".into(),
-        ))
+    fn bulk_82(&mut self, timeout: Duration) -> Result<Vec<u8>, TransportError> {
+        self.read_82(timeout)
     }
 }
 

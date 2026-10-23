@@ -1,4 +1,5 @@
-//! USB transport: commands on bulk endpoints 0x01/0x81, interrupts on 0x83.
+//! USB transport: commands on bulk endpoints 0x01/0x81, image data on bulk 0x82,
+//! interrupts on 0x83.
 
 use std::time::Duration;
 
@@ -17,11 +18,14 @@ pub const SUPPORTED: [(u16, u16); 4] = [
 
 const CMD_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_REPLY: usize = 100 * 1024;
+/// Image data (calibration frames) arrives in one transfer of up to 1 MiB.
+const MAX_IMAGE: usize = 1024 * 1024;
 
 pub struct UsbSensor {
     device: nusb::Device,
     out: nusb::Endpoint<Bulk, Out>,
     inp: nusb::Endpoint<Bulk, In>,
+    img: nusb::Endpoint<Bulk, In>,
     int: nusb::Endpoint<Interrupt, In>,
     pub vendor_id: u16,
     pub product_id: u16,
@@ -53,6 +57,7 @@ impl UsbSensor {
         Ok(UsbSensor {
             out: iface.endpoint::<Bulk, Out>(0x01).map_err(io)?,
             inp: iface.endpoint::<Bulk, In>(0x81).map_err(io)?,
+            img: iface.endpoint::<Bulk, In>(0x82).map_err(io)?,
             int: iface.endpoint::<Interrupt, In>(0x83).map_err(io)?,
             device,
             vendor_id,
@@ -68,6 +73,17 @@ impl UsbSensor {
             Err(TransferError::Cancelled) => Ok(None),
             Err(e) => Err(map(e)),
         }
+    }
+
+    /// One bulk read of image data on endpoint 0x82.
+    pub fn read_82(&mut self, timeout: Duration) -> Result<Vec<u8>, TransportError> {
+        let c = self
+            .img
+            .transfer_blocking(self.img.allocate(MAX_IMAGE), timeout);
+        c.status.map_err(map)?;
+        let data = c.buffer.into_vec();
+        log::trace!("<82< {} bytes", data.len());
+        Ok(data)
     }
 
     /// USB port reset: recovers a sensor stuck after an interrupted exchange.
