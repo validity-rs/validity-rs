@@ -9,6 +9,12 @@
 //! path: the daemon's open sequence, `Scanner::{identify, enroll}`, the
 //! database helpers, cancellation, reconnection.
 //!
+//! Its waits behave like `UsbSession`'s: a finger wait ends with
+//! `Error::Timeout` after the finger deadline ([`FakeSensor::set_finger_deadline`],
+//! 30 s by default), and a wait for an interrupt the emulated sensor will not
+//! raise ([`FakeSensor::hang_next_capture`]) fails at once with the timeout the
+//! sensor deadline would give.
+//!
 //! Fingers are identified by a number chosen by the test. An enrolled record
 //! remembers the finger it was enrolled with (in its template id), and an
 //! identification matches the touched finger against every record, of every
@@ -21,7 +27,7 @@ use std::time::{Duration, Instant};
 use validity_proto::Error as ProtoError;
 use validity_proto::db;
 use validity_proto::pairing::FLASH_LAYOUT;
-use validity_proto::session::{CancelHandle, Sensor};
+use validity_proto::session::{CancelHandle, Deadlines, Sensor, Wait};
 use validity_proto::sid::Sid;
 use validity_proto::transport::TransportError;
 use validity_proto::vendor::Blobs;
@@ -93,6 +99,11 @@ struct State {
     firmware: bool,
     db_full: bool,
     stuck: bool,
+    /// Captures still to hang: accepted, but the scan never starts.
+    hang_captures: u32,
+    /// The reboot command times out (until a USB reset).
+    refuse_reboot: bool,
+    deadlines: Deadlines,
     /// How long a reboot or a USB reset takes the device off the bus.
     reboot_absence: Duration,
     fail_opens: u32,
@@ -146,6 +157,9 @@ impl FakeSensor {
                 firmware: true,
                 db_full: false,
                 stuck: false,
+                hang_captures: 0,
+                refuse_reboot: false,
+                deadlines: Deadlines::DEFAULT,
                 reboot_absence: Duration::ZERO,
                 fail_opens: 0,
                 touches: VecDeque::new(),
@@ -273,6 +287,22 @@ impl FakeSensor {
     pub fn set_stuck(&self, stuck: bool) {
         self.lock().stuck = stuck;
         self.changed();
+    }
+
+    /// The next finger capture is accepted but its scan never starts: the
+    /// sensor stops raising interrupts until it is rebooted (issue #2).
+    pub fn hang_next_capture(&self) {
+        self.lock().hang_captures += 1;
+    }
+
+    /// The reboot command times out, until a USB port reset.
+    pub fn refuse_reboot(&self, v: bool) {
+        self.lock().refuse_reboot = v;
+    }
+
+    /// How long a capture waits for a finger before its deadline passes.
+    pub fn set_finger_deadline(&self, d: Duration) {
+        self.lock().deadlines.finger = d;
     }
 
     /// The next `n` USB opens fail.
@@ -407,6 +437,7 @@ impl Hardware for FakeHardware {
             let mut st = self.0.lock();
             st.counters.resets += 1;
             st.stuck = false;
+            st.refuse_reboot = false;
         }
         self.0.re_enumerate();
         Ok(())
@@ -423,6 +454,8 @@ enum Capture {
     Idle,
     /// Program loaded: the next interrupt says "armed".
     Armed,
+    /// Program accepted, but the sensor never says "armed".
+    Hung,
     /// Waiting for a touch.
     Waiting,
     /// Finger seen: the next interrupt says "done".
@@ -745,6 +778,9 @@ impl FakeChip {
             0x1a => OK.to_vec(),
             // Reboot: the device leaves the bus and comes back.
             0x05 => {
+                if self.shared.lock().refuse_reboot {
+                    return Err(TransportError::Timeout.into());
+                }
                 self.shared.lock().counters.reboots += 1;
                 self.shared.re_enumerate();
                 OK.to_vec()
@@ -768,7 +804,13 @@ impl FakeChip {
             // image data, finger captures (no lines) raise interrupts.
             0x02 => {
                 if le16(p, 3) == 0 {
-                    self.capture = Capture::Armed;
+                    let mut s = self.shared.lock();
+                    self.capture = if s.hang_captures > 0 {
+                        s.hang_captures -= 1;
+                        Capture::Hung
+                    } else {
+                        Capture::Armed
+                    };
                 }
                 OK.to_vec()
             }
@@ -902,10 +944,18 @@ impl Sensor for FakeChip {
     }
 
     fn wait_int(&mut self) -> Result<Vec<u8>, ProtoError> {
+        self.wait_for(Wait::Interrupt)
+    }
+
+    fn wait_for(&mut self, what: Wait) -> Result<Vec<u8>, ProtoError> {
         self.alive()?;
         if let Some(b) = self.ints.pop_front() {
             return Ok(b);
         }
+        let timeout = |deadlines: &Deadlines| ProtoError::Timeout {
+            waiting_for: what,
+            after: deadlines.get(what),
+        };
         match self.capture {
             Capture::Armed => {
                 self.capture = Capture::Waiting;
@@ -917,10 +967,14 @@ impl Sensor for FakeChip {
             }
             _ => {}
         }
-        // Block until a touch, a cancellation or a disconnection, like the
-        // real interrupt endpoint (which the session polls every 100 ms).
-        let deadline = Instant::now() + Duration::from_secs(60);
+        if what != Wait::Finger || self.capture != Capture::Waiting {
+            // Nothing will come: the sensor deadline passes (at once, here).
+            return Err(timeout(&self.shared.lock().deadlines));
+        }
+        // Block until a touch, a cancellation, a disconnection or the finger
+        // deadline, like the real session (which polls every 100 ms).
         let mut st = self.shared.lock();
+        let deadline = Instant::now() + st.deadlines.finger;
         loop {
             if st.generation != self.generation {
                 st.waiting = false;
@@ -945,7 +999,8 @@ impl Sensor for FakeChip {
             }
             if Instant::now() >= deadline {
                 st.waiting = false;
-                return Err(TransportError::Timeout.into());
+                self.shared.changed();
+                return Err(timeout(&st.deadlines));
             }
             if !st.waiting && self.capture == Capture::Waiting {
                 st.waiting = true;

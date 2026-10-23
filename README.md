@@ -129,12 +129,66 @@ sudo target/release/examples/session <dll> <calibration-file> enroll <uid> <fing
 sudo VALIDITY_FWEXT=<file.xpfwext> target/release/examples/session <dll> <cal> reset   # erases the sensor
 ```
 
+`VALIDITY_LOG=info|debug|trace` logs to stderr, each line prefixed with the seconds
+since the start. To diagnose a problem, write the trace straight to a file:
+
+```bash
+sudo VALIDITY_LOG=trace target/release/examples/session <dll> <cal> enroll <uid> <finger> 2> session.log
+```
+
+The trace never contains command or reply contents (keys, templates, flash data), so
+it can be shared. Its lines:
+
+| Line | Meaning |
+|---|---|
+| `>plain> 3e (1 bytes)` | a command in the clear: opcode, length |
+| `<plain< 3e (64 bytes, status 0000)` | its reply: opcode, length, status word |
+| `>app> 5e (13 bytes)`, `<app< 5e (2 bytes, status 0000)` | the same over the encrypted channel |
+| `>usb> 69 bytes`, `<usb< 85 bytes` | the USB transfers that carry them |
+| `channel: handshake`, `channel: open` | the encrypted channel being opened |
+| `wait: a finger (deadline 30s)` | a wait starts, with its deadline |
+| `<int< 0300060000` | an interrupt; its first byte is the type (0 scan armed, 2 finger detected, 3 capture progress) |
+| `<82< N bytes` | image data (calibration) |
+| `WARN timed out after 2s waiting for the capture to start (last command 02, last interrupt none)` | a wait passed its deadline |
+
+The daemon logs the same lines with `--trace-sensor-traffic`.
+
 Recorded sessions can be replayed against the code with
 `VALIDITY_TRACES=<dir> VALIDITY_DLL=<dll> cargo test --test replay`. Recordings contain
 device secrets: they are never committed.
 
 To study the protocol, read python-validity's `validitysensor/` next to
 `crates/validity-proto/src`. The module names match.
+
+## Waits and timeouts
+
+No wait on the sensor is unbounded. Each one has a deadline
+(`validity_proto::session::Deadlines`). When it passes, the operation fails with
+`Error::Timeout`, and a warning names the last command and the last interrupt seen.
+
+| Wait | Deadline | Longest seen in phase 0 |
+|---|---|---|
+| the finger, once the scan is armed (LED on) | 30 s, configurable | user dependent |
+| scan armed after the capture command | 2 s | 6 ms |
+| capture complete after the finger is down | 5 s | 856 ms |
+| match result | 10 s | 829 ms (2 fingers enrolled) |
+| each enrolment step | 5 s | 431 ms |
+| image data (calibration) | 5 s | 103 ms |
+| any other interrupt | 5 s | 6 ms |
+
+Only the finger wait depends on the user. Its default is the same as pam_fprintd's
+default timeout (30 s). In the daemon, set it with `finger_timeout_ms` in
+`/etc/validity/validity.toml`. When it passes:
+
+- a verification ends with `verify-no-match`, which is fprintd's result for a
+  verification that ended without a matching finger;
+- an enrolment reports `enroll-retry-scan` and arms the scan again, because fprintd
+  keeps an enrolment running until the client stops it.
+
+Any other deadline passing means that the sensor stopped answering. The run fails
+with `verify-disconnected` or `enroll-disconnected`, which pam_fprintd treats as
+"fall back to the password". The daemon then reboots the sensor and reopens it. If
+the sensor does not even accept the reboot command, the daemon resets its USB port.
 
 ## Privacy
 
@@ -159,7 +213,8 @@ Do not commit flash dumps. `gitleaks` scans the whole history in CI.
 Issues and pull requests are welcome. Please include:
 - the device USB ID (`lsusb`);
 - the kernel and distribution versions;
-- logs with secrets removed.
+- logs: a trace (`VALIDITY_LOG=trace`, or the daemon's `--trace-sensor-traffic`)
+  holds no command contents, but check it for host names before posting it.
 
 Code must pass `ci/run.sh`.
 

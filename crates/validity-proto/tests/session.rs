@@ -233,10 +233,13 @@ fn usb_session_end_to_end() {
     let h = s.cancel_handle();
     h.cancel();
     assert!(matches!(s.wait_int(), Err(Error::Cancelled)));
-    // No image endpoint on this link.
+    // No image endpoint on this link: the read passes its deadline.
     assert!(matches!(
         s.read_82(),
-        Err(Error::Transport(TransportError::Timeout))
+        Err(Error::Timeout {
+            waiting_for: validity_proto::session::Wait::Image,
+            ..
+        })
     ));
     assert_eq!(s.into_link().plain, [vec![0x3e]]);
 }

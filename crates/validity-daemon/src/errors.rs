@@ -54,6 +54,11 @@ pub enum Failure {
     Cancelled,
     /// The USB device is gone or unresponsive: drop the session and reconnect.
     Lost,
+    /// No finger was placed before the finger deadline; the sensor is fine.
+    NoFinger,
+    /// The sensor stopped raising the interrupts it owes (a wait for the sensor
+    /// passed its deadline): close the session, reboot the sensor, reopen it.
+    Unresponsive,
     /// The sensor's storage is full (status 0x04b5).
     DataFull,
     /// The record already exists (status 0x04c3).
@@ -75,6 +80,8 @@ pub const STATUS_NO_SESSION: u16 = 0x0404;
 pub fn classify(e: &ProtoError) -> Failure {
     match e {
         ProtoError::Cancelled => Failure::Cancelled,
+        ProtoError::Timeout { waiting_for, .. } if waiting_for.is_finger() => Failure::NoFinger,
+        ProtoError::Timeout { .. } => Failure::Unresponsive,
         ProtoError::Transport(_) => Failure::Lost,
         ProtoError::Channel(validity_proto::channel::Error::Transport(_)) => Failure::Lost,
         // The sensor dropped its side of the channel: the session is unusable.
@@ -100,19 +107,32 @@ pub fn is_disconnect(e: &ProtoError) -> bool {
 
 /// `VerifyStatus` result for a failed verification; `None` when nothing is to be
 /// reported (the client cancelled).
+///
+/// No finger in time is `verify-no-match`: fprintd reports a verification that
+/// ended without a matching finger, a cancelled one included, as no match
+/// (pam_fprintd then counts one try). A sensor that stopped answering is
+/// `verify-disconnected`, fprintd's result for a protocol error (pam_fprintd
+/// falls back to the next module, the password).
 pub fn verify_failure(f: Failure) -> Option<&'static str> {
     match f {
         Failure::Cancelled => None,
-        Failure::Lost => Some("verify-disconnected"),
+        Failure::NoFinger => Some("verify-no-match"),
+        Failure::Lost | Failure::Unresponsive => Some("verify-disconnected"),
         Failure::DataFull | Failure::Duplicate | Failure::Other => Some("verify-unknown-error"),
     }
 }
 
 /// `EnrollStatus` result for a failed enrolment; `None` when the client cancelled.
+///
+/// The worker never ends an enrolment for a missing finger: it reports
+/// `enroll-retry-scan` and arms the scan again, as fprintd keeps an enrolment
+/// running until the client stops it. Should one end that way, it is
+/// `enroll-failed`, fprintd's result for an enrolment cut short.
 pub fn enroll_failure(f: Failure) -> Option<&'static str> {
     match f {
         Failure::Cancelled => None,
-        Failure::Lost => Some("enroll-disconnected"),
+        Failure::NoFinger => Some("enroll-failed"),
+        Failure::Lost | Failure::Unresponsive => Some("enroll-disconnected"),
         Failure::DataFull => Some("enroll-data-full"),
         Failure::Duplicate => Some("enroll-duplicate"),
         Failure::Other => Some("enroll-unknown-error"),
@@ -123,6 +143,7 @@ pub fn enroll_failure(f: Failure) -> Option<&'static str> {
 mod tests {
     use super::*;
     use validity_proto::channel;
+    use validity_proto::session::Wait;
     use validity_proto::tls;
     use zbus::DBusError;
 
@@ -175,6 +196,40 @@ mod tests {
         assert_eq!(
             classify(&ProtoError::Protocol("scanning problem".into())),
             Failure::Other
+        );
+
+        // Deadlines: the finger is the user's business, anything else the sensor's.
+        let after = std::time::Duration::from_secs(30);
+        let finger = ProtoError::Timeout {
+            waiting_for: Wait::Finger,
+            after,
+        };
+        assert_eq!(classify(&finger), Failure::NoFinger);
+        assert!(!is_disconnect(&finger));
+        for w in [
+            Wait::CaptureStart,
+            Wait::Capture,
+            Wait::Match,
+            Wait::Enrollment,
+            Wait::Image,
+            Wait::Interrupt,
+        ] {
+            let e = ProtoError::Timeout {
+                waiting_for: w,
+                after,
+            };
+            assert_eq!(classify(&e), Failure::Unresponsive, "{w}");
+            assert!(!is_disconnect(&e));
+        }
+        assert_eq!(verify_failure(Failure::NoFinger), Some("verify-no-match"));
+        assert_eq!(
+            verify_failure(Failure::Unresponsive),
+            Some("verify-disconnected")
+        );
+        assert_eq!(enroll_failure(Failure::NoFinger), Some("enroll-failed"));
+        assert_eq!(
+            enroll_failure(Failure::Unresponsive),
+            Some("enroll-disconnected")
         );
 
         assert_eq!(verify_failure(Failure::Cancelled), None);

@@ -9,6 +9,13 @@
 //! resume, or when USB devices change. The USB device is found again on every
 //! attempt, so a sensor that came back at another address after a suspend
 //! (systemd's hwdb sets `ID_PERSIST=0` for these readers) is picked up.
+//!
+//! Every wait on the sensor has a deadline (`validity_proto::session::Deadlines`).
+//! A finger that does not come in time ends a verification with
+//! `verify-no-match` and re-arms an enrolment scan after `enroll-retry-scan`;
+//! a sensor that stops raising its interrupts fails the run with
+//! `*-disconnected` and is rebooted (USB port reset if it does not take the
+//! reboot) and reopened.
 
 use std::collections::VecDeque;
 use std::ops::ControlFlow;
@@ -352,11 +359,42 @@ impl<H: Hardware> Worker<H> {
                 Err(e) => log::info!("sensor session dropped ({why}): {e}"),
             }
             drop(live.s.into_inner());
-            // The reboot takes it off the bus for a moment, for this process
-            // and for the next one if this is a restart.
-            self.expect_back();
-            if let Err(e) = std::fs::write(self.reboot_marker(), now_ms().to_string()) {
-                log::debug!("cannot record the sensor reboot: {e}");
+            self.rebooted();
+        }
+    }
+
+    /// The reboot takes the sensor off the bus for a moment, for this process
+    /// and for the next one if this is a restart.
+    fn rebooted(&mut self) {
+        self.expect_back();
+        if let Err(e) = std::fs::write(self.reboot_marker(), now_ms().to_string()) {
+            log::debug!("cannot record the sensor reboot: {e}");
+        }
+    }
+
+    /// A sensor that stopped raising its interrupts: the session is closed by
+    /// rebooting the sensor, or by a USB port reset when it does not even take
+    /// the reboot command. The caller reopens it.
+    fn reboot_unresponsive(&mut self, e: &ProtoError) {
+        let Some(mut live) = self.live.take() else {
+            return;
+        };
+        log::warn!("sensor not responding ({e}): rebooting it");
+        live.s.set_op(0);
+        let r = init::close(&mut live.s);
+        let s = live.s.into_inner();
+        match r {
+            Ok(()) => {
+                log::info!("sensor rebooted");
+                self.rebooted();
+            }
+            Err(e) => {
+                log::warn!("sensor reboot failed ({e}): resetting its USB port");
+                match self.hw.reset(s) {
+                    Ok(()) => log::info!("sensor USB port reset"),
+                    Err(e) => log::warn!("sensor USB port reset failed: {e}"),
+                }
+                self.expect_back();
             }
         }
     }
@@ -676,7 +714,21 @@ impl<H: Hardware> Worker<H> {
         let live = self.live.as_mut().expect("checked by the caller");
         live.s.set_op(op);
         let mut failures = 0;
-        let r = live.scanner.identify(&mut live.s, |_e| {
+        let r = live.scanner.identify(&mut live.s, |e| {
+            if errors::classify(e) == Failure::NoFinger {
+                // Not a capture failure. A verification ends (no match); an
+                // enrolment asks for the finger again and arms a new scan.
+                if kind == ActionKind::Verify {
+                    return ControlFlow::Break(());
+                }
+                sink(Event::Status {
+                    op,
+                    kind,
+                    result: retry,
+                    done: false,
+                });
+                return ControlFlow::Continue(());
+            }
             failures += 1;
             sink(Event::Status {
                 op,
@@ -694,16 +746,25 @@ impl<H: Hardware> Worker<H> {
         r.map_err(|e| (e, failures >= max))
     }
 
-    /// After a failed run: reconnect when the session is unusable, reset when
-    /// the sensor looks stuck.
+    /// After a failed run: reconnect when the session is unusable, reboot a
+    /// sensor that stopped answering, reset one that looks stuck.
     fn after_failure(&mut self, e: &ProtoError, stuck: bool) {
         if stuck {
             log::warn!("sensor stuck after repeated capture failures ({e}): resetting it");
             self.drop_session(true);
             self.connect();
-        } else if errors::classify(e) == Failure::Lost {
-            self.lost(e);
-            self.connect();
+            return;
+        }
+        match errors::classify(e) {
+            Failure::Lost => {
+                self.lost(e);
+                self.connect();
+            }
+            Failure::Unresponsive => {
+                self.reboot_unresponsive(e);
+                self.connect();
+            }
+            _ => {}
         }
     }
 
@@ -768,7 +829,11 @@ impl<H: Hardware> Worker<H> {
                 }
             }
             Err((e, stuck)) => {
-                log::warn!("verification failed: {e}");
+                if errors::classify(&e) == Failure::NoFinger {
+                    log::info!("verification ended: {e}");
+                } else {
+                    log::warn!("verification failed: {e}");
+                }
                 let r = if stuck {
                     "verify-unknown-error"
                 } else {
@@ -875,6 +940,11 @@ impl<H: Hardware> Worker<H> {
                     }
                     ControlFlow::Continue(())
                 }
+                // No finger in time: ask again, not a capture failure.
+                EnrollProgress::Retry(e) if errors::classify(e) == Failure::NoFinger => {
+                    emit("enroll-retry-scan");
+                    ControlFlow::Continue(())
+                }
                 EnrollProgress::Retry(_) => {
                     failures += 1;
                     emit("enroll-retry-scan");
@@ -894,8 +964,9 @@ impl<H: Hardware> Worker<H> {
                 self.emit(Event::OpEnded { op });
             }
             Err(e) => {
-                // Records may have been written before the failure.
-                if errors::classify(&e) != Failure::Lost {
+                // Records may have been written before the failure (a lost or
+                // unresponsive sensor is reopened, which reads them anyway).
+                if !matches!(errors::classify(&e), Failure::Lost | Failure::Unresponsive) {
                     let _ = self.refresh_prints();
                 }
                 fail(self, &e, failures >= max)

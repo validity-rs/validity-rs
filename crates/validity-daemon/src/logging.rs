@@ -3,9 +3,10 @@
 //! which journald turns into the entry's priority; on a terminal the level is
 //! spelled out.
 //!
-//! Sensor traffic (validity-proto's `trace` records: raw commands, which include
-//! pairing material before the channel is open) is only ever logged when asked
-//! for on the command line, never through the configuration file.
+//! Sensor traffic (validity-proto's `trace` records: one line per command,
+//! reply and interrupt with the opcode, length and status word, never the
+//! content) is only ever logged when asked for on the command line, never
+//! through the configuration file.
 
 use log::{Level, LevelFilter, Log, Metadata, Record};
 

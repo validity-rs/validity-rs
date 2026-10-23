@@ -1,8 +1,10 @@
 //! Plain sensor commands, status handling and the crate error type (python-validity
 //! `usb.py`, `util.py`).
 
+use std::time::Duration;
+
 use crate::channel;
-use crate::session::Sensor;
+use crate::session::{Sensor, Wait};
 use crate::transport::TransportError;
 use crate::vendor::Blobs;
 
@@ -20,6 +22,14 @@ pub enum Error {
     Protocol(String),
     /// The operation was cancelled while waiting for the sensor.
     Cancelled,
+    /// A wait passed its deadline ([`crate::session::Deadlines`]). For
+    /// [`Wait::Finger`] the user did not place a finger in time and the sensor
+    /// is fine; for any other wait the sensor stopped answering: close the
+    /// session, reboot the sensor and reopen it.
+    Timeout {
+        waiting_for: Wait,
+        after: Duration,
+    },
     /// The operation is not available on this sensor or transport.
     Unsupported(&'static str),
     /// A replayed session diverged from the recorded one.
@@ -37,6 +47,9 @@ impl core::fmt::Display for Error {
             Error::Malformed(s) => write!(f, "malformed reply: {s}"),
             Error::Protocol(s) => f.write_str(s),
             Error::Cancelled => f.write_str("cancelled"),
+            Error::Timeout { waiting_for, after } => {
+                write!(f, "timed out after {after:?} waiting for {waiting_for}")
+            }
             Error::Unsupported(s) => write!(f, "unsupported: {s}"),
             Error::Replay(s) => write!(f, "replay mismatch: {s}"),
         }

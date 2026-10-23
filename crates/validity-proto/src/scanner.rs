@@ -13,7 +13,7 @@ use crate::db;
 use crate::flash::{
     erase_flash, read_flash, read_flash_all, with_cleanups, write_enable, write_flash_all,
 };
-use crate::session::Sensor;
+use crate::session::{Deadlines, Sensor, Wait};
 use crate::sid::Sid;
 use crate::tables::{DeviceInfo, SensorCaptureProg, SensorTypeInfo, dev_info_lookup};
 use crate::timeslot::{self, Chunk, Insn, decode_insn, find_nth_insn, find_nth_regwrite};
@@ -46,15 +46,29 @@ pub fn get_prg_status2(s: &mut impl Sensor) -> Result<Vec<u8>, Error> {
     s.app(&[0x51, 0, 0x20, 0, 0])
 }
 
-/// Polls the capture program until it is idle (0) or done (7).
+/// Polling period of [`wait_till_finished`].
+const PRG_STATUS_POLL: Duration = Duration::from_millis(200);
+
+/// Polls the capture program until it is idle (0) or done (7), for at most
+/// the default capture deadline ([`Deadlines::capture`]); then fails with
+/// [`Error::Timeout`] ([`Wait::Capture`]). python-validity polls forever.
 pub fn wait_till_finished(s: &mut impl Sensor) -> Result<(), Error> {
-    loop {
+    let limit = Deadlines::DEFAULT.capture;
+    let polls = limit.as_millis() / PRG_STATUS_POLL.as_millis();
+    for i in 0..=polls {
         let st = get_prg_status(s)?;
         if matches!(st.first(), Some(0 | 7)) {
             return Ok(());
         }
-        s.pause(Duration::from_millis(200));
+        if i < polls {
+            s.pause(PRG_STATUS_POLL);
+        }
     }
+    log::warn!("timed out after {limit:?} waiting for the capture program to finish");
+    Err(Error::Timeout {
+        waiting_for: Wait::Capture,
+        after: limit,
+    })
 }
 
 pub fn read_hw_reg32(s: &mut impl Sensor, addr: u32) -> Result<u32, Error> {
@@ -309,6 +323,17 @@ pub enum Identified {
 
 /// Pause before retrying after a failed capture.
 pub const RETRY_PAUSE: Duration = Duration::from_secs(1);
+
+/// A wait for the sensor (not for the finger) that passed its deadline: the
+/// sensor stopped answering, so retrying the capture is pointless.
+fn sensor_timeout(e: &Error) -> bool {
+    matches!(e, Error::Timeout { waiting_for, .. } if !waiting_for.is_finger())
+}
+
+/// No finger was placed before [`Deadlines::finger`].
+fn finger_timeout(e: &Error) -> bool {
+    matches!(e, Error::Timeout { waiting_for, .. } if waiting_for.is_finger())
+}
 
 /// An opened sensor: model, ROM, factory capture program, factory and host
 /// calibration (python-validity's `Sensor`).
@@ -738,18 +763,18 @@ impl Scanner {
     fn capture_inner(&self, s: &mut impl Sensor, mode: CaptureMode) -> Result<CaptureInfo, Error> {
         status(&s.app(&self.build_cmd_02(mode)?)?)?;
         let hexs = crate::hex::encode;
-        let b = s.wait_int()?;
+        let b = s.wait_for(Wait::CaptureStart)?;
         if b.first() != Some(&0) {
             return Err(Error::Protocol(format!(
                 "capture start: unexpected interrupt {}",
                 hexs(&b)
             )));
         }
-        // Wait for the finger.
-        while s.wait_int()?.first() != Some(&2) {}
+        // Wait for the finger: the scan is armed (the LED pattern runs).
+        while s.wait_for(Wait::Finger)?.first() != Some(&2) {}
         // Wait for the capture to complete.
         loop {
-            let b = s.wait_int()?;
+            let b = s.wait_for(Wait::Capture)?;
             if b.first() != Some(&3) || b.len() < 3 {
                 return Err(Error::Protocol(format!(
                     "capture: unexpected interrupt {}",
@@ -790,7 +815,7 @@ impl Scanner {
         let mut r = Reader::new(status(&rsp)?, "enrollment key");
         let k = r.u32()?;
         r.end()?;
-        s.wait_int()?;
+        s.wait_for(Wait::Enrollment)?;
         Ok(k)
     }
 
@@ -820,7 +845,7 @@ impl Scanner {
     /// Adds the captured image to the enrolment.
     fn append_new_image(s: &mut impl Sensor, blobs: &Blobs, prev: &[u8]) -> Result<Update, Error> {
         Self::enrollment_update(s, blobs, prev)?;
-        s.wait_int()?;
+        s.wait_for(Wait::Enrollment)?;
         let res = Self::enrollment_update(s, blobs, prev)?;
         parse_enrollment_update(&res)
     }
@@ -830,6 +855,11 @@ impl Scanner {
     /// attempt; returning `Break` from a failed attempt aborts the enrolment with
     /// that error. The reference retries forever, without the pause its comment
     /// asks for; here failures pause [`RETRY_PAUSE`] and can be aborted.
+    ///
+    /// No finger within [`Deadlines::finger`] is a failed attempt like any
+    /// other (`Retry` with [`Error::Timeout`] for [`Wait::Finger`]): the scan
+    /// is re-armed unless `progress` breaks. Any other timeout means the
+    /// sensor stopped answering: it is returned at once, without retrying.
     pub fn enroll(
         &self,
         s: &mut impl Sensor,
@@ -859,12 +889,17 @@ impl Scanner {
                 }
                 Ok(None) => end?,
                 // A lost device (or a diverged replay) is not retried; the
-                // reference re-raises USB errors too.
+                // reference re-raises USB errors too. Neither is a sensor that
+                // stopped answering.
                 Err(e @ (Error::Transport(_) | Error::Replay(_))) => return Err(e),
+                Err(e) if sensor_timeout(&e) => return Err(e),
                 Err(e) => {
                     end?;
                     log::info!("enrolment attempt failed: {e}");
                     if progress(EnrollProgress::Retry(&e)).is_break() {
+                        if finger_timeout(&e) {
+                            glow_end_scan(s)?;
+                        }
                         return Err(e);
                     }
                     s.pause(RETRY_PAUSE);
@@ -880,7 +915,7 @@ impl Scanner {
             None => db::new_user(s, blobs, identity)?,
         };
         let recid = db::new_finger(s, blobs, user, &finger)?;
-        s.wait_int()?;
+        s.wait_for(Wait::Enrollment)?;
         glow_end_scan(s)?;
         Ok(recid)
     }
@@ -923,7 +958,7 @@ impl Scanner {
         // 0x5e 02 ff, storage 0 and user 0 (match any), 1, 0, 0.
         let c = [0x5e, 2, 0xff, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0];
         status(&s.app(&c)?)?;
-        let b = s.wait_int()?;
+        let b = s.wait_for(Wait::Match)?;
         if b.first() != Some(&3) {
             return Ok(Identified::NoMatch(b));
         }
@@ -956,6 +991,11 @@ impl Scanner {
 
     /// Captures a finger (retrying failed captures; `on_retry` may abort) and
     /// matches it.
+    ///
+    /// No finger within [`Deadlines::finger`] is a failed capture
+    /// ([`Error::Timeout`] for [`Wait::Finger`], passed to `on_retry`); any
+    /// other timeout means the sensor stopped answering and is returned at
+    /// once.
     pub fn identify(
         &self,
         s: &mut impl Sensor,
@@ -967,6 +1007,7 @@ impl Scanner {
             match r {
                 Ok(_) => break,
                 Err(e @ (Error::Transport(_) | Error::Replay(_))) => return Err(e),
+                Err(e) if sensor_timeout(&e) => return Err(e),
                 Err(Error::Cancelled) => {
                     glow_end_scan(s)?;
                     return Err(Error::Cancelled);
@@ -974,6 +1015,9 @@ impl Scanner {
                 Err(e) => {
                     log::info!("capture failed: {e}");
                     if on_retry(&e).is_break() {
+                        if finger_timeout(&e) {
+                            glow_end_scan(s)?;
+                        }
                         return Err(e);
                     }
                     s.pause(RETRY_PAUSE);
@@ -1137,6 +1181,22 @@ mod tests {
         );
         u.pop();
         assert!(parse_enrollment_update(&u).is_err());
+    }
+
+    #[test]
+    fn wait_till_finished_is_bounded() {
+        let status = |st: u8| cmd(&[0x51, 0, 0, 0, 0], vec![st, 0]);
+        let mut s = Script::steps(vec![status(1), status(1), status(7)]).opened();
+        wait_till_finished(&mut s).unwrap();
+        s.done();
+        // A program that never finishes: one poll every 200 ms for 5 s, then a timeout.
+        let mut s = Script::steps((0..26).map(|_| status(1)).collect()).opened();
+        assert!(matches!(
+            wait_till_finished(&mut s),
+            Err(Error::Timeout { waiting_for: Wait::Capture, after })
+                if after == Deadlines::DEFAULT.capture
+        ));
+        s.done();
     }
 
     #[test]

@@ -123,9 +123,7 @@ impl UsbSensor {
             .img
             .transfer_blocking(self.img.allocate(MAX_IMAGE), timeout);
         c.status.map_err(map)?;
-        let data = c.buffer.into_vec();
-        log::trace!("<82< {} bytes", data.len());
-        Ok(data)
+        Ok(c.buffer.into_vec())
     }
 
     /// USB port reset: recovers a sensor stuck after an interrupted exchange.
@@ -134,9 +132,13 @@ impl UsbSensor {
     }
 }
 
+/// At `trace` level, one line per transfer with its length only (`>usb> N
+/// bytes`, `<usb< N bytes`): the content is key material before the channel
+/// is open and ciphertext after. [`crate::session::UsbSession`] logs the
+/// commands themselves.
 impl Transport for UsbSensor {
     fn cmd(&mut self, out: &[u8]) -> Result<Vec<u8>, TransportError> {
-        log::trace!(">cmd> {}", hex(out));
+        log::trace!(">usb> {} bytes", out.len());
         self.out
             .transfer_blocking(Buffer::from(out.to_vec()), CMD_TIMEOUT)
             .status
@@ -146,13 +148,9 @@ impl Transport for UsbSensor {
             .transfer_blocking(self.inp.allocate(MAX_REPLY), CMD_TIMEOUT);
         c.status.map_err(map)?;
         let rsp = c.buffer.into_vec();
-        log::trace!("<cmd< {}", hex(&rsp));
+        log::trace!("<usb< {} bytes", rsp.len());
         Ok(rsp)
     }
-}
-
-fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 #[cfg(test)]

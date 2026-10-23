@@ -12,7 +12,7 @@ use validity_proto::Error as ProtoError;
 use validity_proto::calibration::CalibrationFile;
 use validity_proto::channel;
 use validity_proto::scanner::{Identified, Scanner};
-use validity_proto::session::{CancelHandle, Sensor};
+use validity_proto::session::{CancelHandle, Sensor, Wait};
 use validity_proto::tls;
 use validity_proto::vendor::Blobs;
 use validity_proto::{cmd, db, flash};
@@ -280,6 +280,22 @@ impl<S: Sensor> Guarded<S> {
             (self.sink)(Event::Finger { present, needed });
         }
     }
+
+    /// Finger-needed / finger-present from a capture interrupt.
+    fn track(&mut self, r: &Result<Vec<u8>, ProtoError>) {
+        if self.in_capture
+            && let Ok(b) = r
+        {
+            // The capture interrupts as `Scanner::capture` reads them: 0 =
+            // capture armed, 2 = finger detected, 3 with bit 2 of byte 2 = done.
+            match (b.first(), b.get(2)) {
+                (Some(0), _) => self.set_finger(false, true),
+                (Some(2), _) => self.set_finger(true, true),
+                (Some(3), Some(x)) if x & 4 != 0 => self.set_finger(true, false),
+                _ => {}
+            }
+        }
+    }
 }
 
 impl<S: Sensor> Sensor for Guarded<S> {
@@ -307,18 +323,14 @@ impl<S: Sensor> Sensor for Guarded<S> {
 
     fn wait_int(&mut self) -> Result<Vec<u8>, ProtoError> {
         let r = self.inner.wait_int();
-        if self.in_capture
-            && let Ok(b) = &r
-        {
-            // The capture interrupts as `Scanner::capture` reads them: 0 =
-            // capture armed, 2 = finger detected, 3 with bit 2 of byte 2 = done.
-            match (b.first(), b.get(2)) {
-                (Some(0), _) => self.set_finger(false, true),
-                (Some(2), _) => self.set_finger(true, true),
-                (Some(3), Some(x)) if x & 4 != 0 => self.set_finger(true, false),
-                _ => {}
-            }
-        }
+        self.track(&r);
+        r
+    }
+
+    /// The inner sensor's bounded wait (its deadlines apply unchanged).
+    fn wait_for(&mut self, what: Wait) -> Result<Vec<u8>, ProtoError> {
+        let r = self.inner.wait_for(what);
+        self.track(&r);
         r
     }
 
@@ -499,6 +511,7 @@ mod tests {
         cancel: CancelHandle,
         cleared: usize,
         paused: Duration,
+        waits: Vec<Wait>,
     }
 
     impl Sensor for Probe {
@@ -516,6 +529,16 @@ mod tests {
                 return Err(ProtoError::Cancelled);
             }
             Ok(self.ints.pop_front().unwrap_or_default())
+        }
+        fn wait_for(&mut self, what: Wait) -> Result<Vec<u8>, ProtoError> {
+            self.waits.push(what);
+            if what == Wait::Finger && self.ints.is_empty() {
+                return Err(ProtoError::Timeout {
+                    waiting_for: what,
+                    after: Duration::from_secs(30),
+                });
+            }
+            self.wait_int()
         }
         fn read_82(&mut self) -> Result<Vec<u8>, ProtoError> {
             Ok(vec![])
@@ -540,6 +563,7 @@ mod tests {
                 cancel: cancel.clone(),
                 cleared: 0,
                 paused: Duration::ZERO,
+                waits: Vec::new(),
             },
             cancel,
             canceller.clone(),
@@ -582,6 +606,29 @@ mod tests {
         c.cancel(1);
         g.pause(Duration::from_secs(5));
         assert_eq!(g.inner.paused, Duration::from_millis(120));
+    }
+
+    #[test]
+    fn bounded_waits_reach_the_session_unchanged() {
+        let (mut g, _, seen) = guarded(vec![vec![0, 1, 2, 3, 4], vec![2, 0, 0, 0, 0]]);
+        g.set_op(1);
+        g.cmd(&[CMD_CAPTURE, 1, 2]).unwrap();
+        assert_eq!(g.wait_for(Wait::CaptureStart).unwrap()[0], 0);
+        assert_eq!(g.wait_for(Wait::Finger).unwrap()[0], 2);
+        // The session's deadline error comes through as it is.
+        assert!(matches!(
+            g.wait_for(Wait::Finger),
+            Err(ProtoError::Timeout {
+                waiting_for: Wait::Finger,
+                ..
+            })
+        ));
+        assert_eq!(
+            g.inner.waits,
+            [Wait::CaptureStart, Wait::Finger, Wait::Finger]
+        );
+        let fin = |present, needed| Event::Finger { present, needed };
+        assert_eq!(*seen.lock().unwrap(), [fin(false, true), fin(true, true)]);
     }
 
     #[test]

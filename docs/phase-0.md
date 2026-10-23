@@ -76,6 +76,10 @@ Observed on hardware:
   back without losing the enrolled fingers.
 - After every session the sensor reboots and is off the bus for about half a second.
   It then returns at a new USB address.
+- Every interrupt the sensor owes came quickly: at most 6 ms for the scan to be
+  armed, 856 ms for a capture, 829 ms for a match and 431 ms for an enrolment step.
+  These delays set validity-rs's deadlines (README, *Waits and timeouts*). Only the
+  finger wait is long, and it depends on the user.
 
 The same session (pairing from an erased sensor, enrolment, identification) was then
 repeated entirely with validity-rs.

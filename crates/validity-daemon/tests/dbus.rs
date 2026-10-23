@@ -1008,12 +1008,161 @@ fn a_stuck_sensor_is_reset_once_and_recovers() {
         d.verify_start("any").await.unwrap();
         assert_eq!(statuses(&mut vs).await, ["verify-disconnected"]);
         d.verify_stop().await.unwrap();
+        // The status comes before the reconnection: until the worker drops the
+        // session the device still reads as ready.
+        wait_until("the second reset", async || env.fake.counters().resets == 2).await;
         ready(&d).await;
         assert_eq!(env.fake.counters().resets, 2);
         env.fake.touch([Touch::Finger(1)]);
         d.verify_start("any").await.unwrap();
         assert_eq!(statuses(&mut vs).await, ["verify-match"]);
         d.verify_stop().await.unwrap();
+    });
+}
+
+#[test]
+fn no_finger_in_time_ends_a_verify_and_rearms_an_enrolment() {
+    let env = Env::new(|f| {
+        f.enroll_directly(&alice_sid(), 2, 1);
+        f.set_finger_deadline(Duration::from_millis(200));
+    });
+    zbus::block_on(async {
+        let (_c, d) = env.device().await;
+        ready(&d).await;
+        let before = env.fake.counters();
+        d.claim("").await.unwrap();
+        let mut vs = verify_stream(d.receive_verify_status().await.unwrap());
+        let mut es = enroll_stream(d.receive_enroll_status().await.unwrap());
+
+        // No finger: the verification ends with no match (fprintd's result for
+        // a verification that ended without a matching finger).
+        d.verify_start("any").await.unwrap();
+        assert_eq!(statuses(&mut vs).await, ["verify-no-match"]);
+        d.verify_stop().await.unwrap();
+        assert!(!d.finger_needed().await.unwrap());
+
+        // Enrolment: each missed finger asks again and re-arms the scan, in
+        // the duplicate check as for the images; the enrolment goes on.
+        d.enroll_start("left-thumb").await.unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                next_with_timeout(&mut es, Duration::from_secs(5)).await,
+                Some(("enroll-retry-scan".to_string(), false))
+            );
+        }
+        env.fake.touch([Touch::Finger(9)]);
+        let mut got = Vec::new();
+        while got.last().map(String::as_str) != Some("enroll-stage-passed") {
+            let (r, done) = next_with_timeout(&mut es, Duration::from_secs(5))
+                .await
+                .expect("a status");
+            assert!(!done, "{r}");
+            got.push(r);
+        }
+        // An image missed too: asked again, then the finger comes.
+        assert_eq!(
+            next_with_timeout(&mut es, Duration::from_secs(5)).await,
+            Some(("enroll-retry-scan".to_string(), false))
+        );
+        env.fake.touch(vec![Touch::Finger(9); 5]);
+        let rest = statuses(&mut es).await;
+        assert_eq!(rest.last().map(String::as_str), Some("enroll-completed"));
+        assert_eq!(
+            rest.iter()
+                .filter(|r| r.as_str() == "enroll-stage-passed")
+                .count(),
+            4,
+            "{rest:?}"
+        );
+        assert!(
+            rest.iter().all(|r| matches!(
+                r.as_str(),
+                "enroll-retry-scan" | "enroll-stage-passed" | "enroll-completed"
+            )),
+            "{rest:?}"
+        );
+        d.enroll_stop().await.unwrap();
+        let records = env.fake.records();
+        assert!(
+            records
+                .iter()
+                .any(|(sid, _, f)| *sid == alice_sid() && *f == 9),
+            "{records:?}"
+        );
+        assert_eq!(
+            d.list_enrolled_fingers("").await.unwrap(),
+            ["left-thumb", "right-index-finger"]
+        );
+
+        // The sensor was fine all along: never rebooted, reset or reopened.
+        let after = env.fake.counters();
+        assert_eq!(
+            (after.reboots, after.resets, after.opens),
+            (before.reboots, before.resets, before.opens)
+        );
+        env.fake.touch([Touch::Finger(1)]);
+        d.verify_start("any").await.unwrap();
+        assert_eq!(statuses(&mut vs).await, ["verify-match"]);
+        d.verify_stop().await.unwrap();
+    });
+}
+
+#[test]
+fn a_sensor_that_stops_answering_is_rebooted_and_reopened() {
+    let env = Env::new(|f| f.enroll_directly(&alice_sid(), 2, 1));
+    zbus::block_on(async {
+        let (_c, d) = env.device().await;
+        ready(&d).await;
+        let before = env.fake.counters();
+        d.claim("").await.unwrap();
+        let mut vs = verify_stream(d.receive_verify_status().await.unwrap());
+        let mut es = enroll_stream(d.receive_enroll_status().await.unwrap());
+
+        // The scan never starts (issue #2): the run fails at once, the sensor
+        // is rebooted and reopened, and works again.
+        env.fake.hang_next_capture();
+        d.verify_start("any").await.unwrap();
+        assert_eq!(statuses(&mut vs).await, ["verify-disconnected"]);
+        d.verify_stop().await.unwrap();
+        // The status comes first; the reboot and the reopening follow.
+        let reopened = async |reboots: u32, resets: u32, opens: u32| {
+            wait_until("the sensor to be reopened", async || {
+                let n = env.fake.counters();
+                (n.reboots, n.resets, n.opens)
+                    == (
+                        before.reboots + reboots,
+                        before.resets + resets,
+                        before.opens + opens,
+                    )
+            })
+            .await;
+            ready(&d).await;
+        };
+        reopened(1, 0, 1).await;
+        env.fake.touch([Touch::Finger(1)]);
+        d.verify_start("any").await.unwrap();
+        assert_eq!(statuses(&mut vs).await, ["verify-match"]);
+        d.verify_stop().await.unwrap();
+
+        // Same during an enrolment.
+        env.fake.hang_next_capture();
+        d.enroll_start("left-thumb").await.unwrap();
+        assert_eq!(statuses(&mut es).await, ["enroll-disconnected"]);
+        d.enroll_stop().await.unwrap();
+        reopened(2, 0, 2).await;
+
+        // A sensor that does not even take the reboot gets a USB port reset.
+        env.fake.hang_next_capture();
+        env.fake.refuse_reboot(true);
+        d.verify_start("any").await.unwrap();
+        assert_eq!(statuses(&mut vs).await, ["verify-disconnected"]);
+        d.verify_stop().await.unwrap();
+        reopened(2, 1, 3).await;
+        env.fake.touch([Touch::Finger(1)]);
+        d.verify_start("any").await.unwrap();
+        assert_eq!(statuses(&mut vs).await, ["verify-match"]);
+        d.verify_stop().await.unwrap();
+        d.release().await.unwrap();
     });
 }
 

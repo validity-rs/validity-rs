@@ -6,7 +6,7 @@ use std::path::Path;
 use std::pin::Pin;
 
 use futures_core::Stream;
-use validity_proto::session::UsbSession;
+use validity_proto::session::{Deadlines, UsbSession};
 use validity_proto::tls::PskKeys;
 use validity_proto::transport::OsEntropy;
 use validity_proto::usb::{self, UsbSensor};
@@ -56,11 +56,13 @@ const SYSFS_USB: &str = "/sys/bus/usb/devices";
 #[derive(Debug)]
 pub struct UsbHardware {
     psk: Result<PskKeys, String>,
+    deadlines: Deadlines,
 }
 
 impl UsbHardware {
-    pub fn new(psk: Result<PskKeys, String>) -> Self {
-        UsbHardware { psk }
+    /// `deadlines` bound every wait of the sessions it opens.
+    pub fn new(psk: Result<PskKeys, String>, deadlines: Deadlines) -> Self {
+        UsbHardware { psk, deadlines }
     }
 }
 
@@ -81,7 +83,7 @@ impl Hardware for UsbHardware {
         let psk = self.psk.clone().map_err(OpenFailure::Setup)?;
         let dev = UsbSensor::open().map_err(|e| OpenFailure::Io(e.to_string()))?;
         let id = (dev.vendor_id, dev.product_id);
-        let session = UsbSession::new(dev, OsEntropy, psk);
+        let session = UsbSession::new(dev, OsEntropy, psk).with_deadlines(self.deadlines);
         let cancel = session.cancel_handle();
         Ok(Opened {
             session,

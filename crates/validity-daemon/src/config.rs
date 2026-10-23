@@ -12,6 +12,10 @@
 //! # How long Claim / ListEnrolledFingers wait for a sensor that is coming up
 //! # (start, resume) before failing; an absent or broken sensor fails at once.
 //! ready_timeout_ms = 3000
+//! # How long a scan waits for the finger: a verification then ends with
+//! # verify-no-match, an enrolment asks for the finger again. Every other wait
+//! # on the sensor has a fixed deadline; passing one reboots the sensor.
+//! finger_timeout_ms = 30000
 //!
 //! # SIDs for users enrolled under another identity (by default a user is
 //! # S-1-5-21-111111111-1111111111-1111111111-<uid>, as with python-validity).
@@ -25,6 +29,7 @@ use std::time::Duration;
 
 use log::LevelFilter;
 use serde::Deserialize;
+use validity_proto::session::Deadlines;
 use validity_proto::sid::Sid;
 
 pub const DEFAULT_CONFIG: &str = "/etc/validity/validity.toml";
@@ -39,6 +44,7 @@ struct File {
     state_dir: Option<PathBuf>,
     log_level: Option<String>,
     ready_timeout_ms: Option<u64>,
+    finger_timeout_ms: Option<u64>,
     #[serde(default)]
     users: BTreeMap<String, String>,
 }
@@ -56,6 +62,9 @@ pub struct Config {
     pub state_dir: PathBuf,
     pub log_level: LevelFilter,
     pub ready_timeout: Duration,
+    /// How long a scan waits for the finger (`finger_timeout_ms`); the other
+    /// deadlines of [`Deadlines`] are fixed.
+    pub finger_timeout: Duration,
     pub sid_overrides: BTreeMap<String, Sid>,
     pub bus: Bus,
 }
@@ -86,8 +95,8 @@ Options:
   --vendor-dll PATH        Synaptics driver DLL with the sensor command blobs
   --state-dir PATH         state directory (default /var/lib/validity)
   --log-level LEVEL        error, warn, info (default) or debug
-  --trace-sensor-traffic   log every sensor command and reply (contains pairing
-                           material: for debugging sessions only)
+  --trace-sensor-traffic   log every sensor command, reply and interrupt (opcode,
+                           length and status only, never the content)
   --session                serve on the session bus (development)
   --address ADDRESS        serve on the bus at ADDRESS (tests)
   -h, --help               this text
@@ -178,6 +187,9 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
         state_dir,
         log_level,
         ready_timeout: Duration::from_millis(file.ready_timeout_ms.unwrap_or(3000)),
+        finger_timeout: file
+            .finger_timeout_ms
+            .map_or(Deadlines::DEFAULT.finger, Duration::from_millis),
         sid_overrides,
         bus,
     }))
@@ -209,6 +221,7 @@ vendor_dll = "/opt/v/syna.dll"
 state_dir = "/srv/validity"
 log_level = "debug"
 ready_timeout_ms = 1500
+finger_timeout_ms = 12000
 [users]
 alice = "S-1-5-21-7-8-9-500"
 "#,
@@ -224,6 +237,7 @@ alice = "S-1-5-21-7-8-9-500"
         );
         assert_eq!(c.log_level, LevelFilter::Debug);
         assert_eq!(c.ready_timeout, Duration::from_millis(1500));
+        assert_eq!(c.finger_timeout, Duration::from_secs(12));
         assert_eq!(c.sid_overrides["alice"].to_string(), "S-1-5-21-7-8-9-500");
         assert_eq!(c.bus, Bus::System);
 
@@ -273,6 +287,8 @@ alice = "S-1-5-21-7-8-9-500"
         );
         assert_eq!(c.log_level, LevelFilter::Info);
         assert_eq!(c.ready_timeout, Duration::from_secs(3));
+        assert_eq!(c.finger_timeout, Deadlines::DEFAULT.finger);
+        assert_eq!(c.finger_timeout, Duration::from_secs(30));
         assert_eq!(c.bus, Bus::Session);
 
         assert_eq!(parse(&args(&["--help"])).unwrap(), Cli::Help);

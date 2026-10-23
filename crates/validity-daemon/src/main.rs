@@ -9,6 +9,7 @@ use validity_daemon::polkit::Polkit;
 use validity_daemon::service::{self, Deps, Options, Setup};
 use validity_daemon::usb::{UsbHardware, host_keys, load_blobs};
 use validity_daemon::users::{SidMap, SystemUsers};
+use validity_proto::session::Deadlines;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -36,7 +37,13 @@ fn main() -> ExitCode {
     if let Err(e) = &blobs {
         log::warn!("{e}");
     }
-    let hw = UsbHardware::new(host_keys(std::path::Path::new("/sys/class/dmi/id")));
+    let hw = UsbHardware::new(
+        host_keys(std::path::Path::new("/sys/class/dmi/id")),
+        Deadlines {
+            finger: config.finger_timeout,
+            ..Deadlines::DEFAULT
+        },
+    );
     let setup = Setup {
         blobs,
         calibration: config.calibration_path(),

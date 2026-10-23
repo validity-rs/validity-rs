@@ -156,16 +156,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Minimal logger: `VALIDITY_LOG=info|debug|trace` prints to stderr.
+/// Minimal logger: `VALIDITY_LOG=info|debug|trace` prints to stderr, each line
+/// prefixed with the seconds since the start (the trace shows how long each
+/// wait on the sensor took).
 fn env_logger_lite() {
-    struct L(log::LevelFilter);
+    struct L(log::LevelFilter, Instant);
     impl log::Log for L {
         fn enabled(&self, m: &log::Metadata<'_>) -> bool {
             m.level() <= self.0
         }
         fn log(&self, r: &log::Record<'_>) {
             if self.enabled(r.metadata()) {
-                eprintln!("{} {}", r.level(), r.args());
+                eprintln!(
+                    "{:10.3} {} {}",
+                    self.1.elapsed().as_secs_f64(),
+                    r.level(),
+                    r.args()
+                );
             }
         }
         fn flush(&self) {}
@@ -174,6 +181,6 @@ fn env_logger_lite() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(log::LevelFilter::Warn);
-    let _ = log::set_logger(Box::leak(Box::new(L(level))));
+    let _ = log::set_logger(Box::leak(Box::new(L(level, Instant::now()))));
     log::set_max_level(level);
 }
