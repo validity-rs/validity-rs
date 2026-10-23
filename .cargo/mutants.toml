@@ -12,4 +12,40 @@ exclude_re = [
     # a successful handshake, and a failed one resets both, so no caller can observe
     # one without the other.
     "channel.rs:.*replace && with \\|\\| in Channel::is_open",
+    # `(a << 8) | x` vs `^` folding the SID authority bytes: the low 8 bits of
+    # `a << 8` are zero and `x` is a byte, so the operands share no bit and `|`
+    # equals `^`.
+    "sid.rs:.*replace \\| with \\^ in Sid::from_bytes",
+    # `hi << 4 | lo` vs `^` joining two hex nibbles: `lo` <= 0xf and the low 4 bits
+    # of `hi << 4` are zero, so `|` equals `^`.
+    "hex.rs:.*replace \\| with \\^ in decode",
+    # The three `|` of `decode_insn` join disjoint bit fields, so `|` equals `^`:
+    # `(op & 1) << 8` (bit 8) with a byte operand (bits 0-7), for Enable SO and
+    # Disable SO; a low byte with `byte << 8`, for Register Write.
+    "timeslot.rs:.*replace \\| with \\^ in decode_insn",
+    # The three `(m << 2) | fuzzy(..)` of `metric`: `fuzzy` returns 0, 1 or 2
+    # (bits 0-1) and the low two bits of `m << 2` are zero, so `|` equals `^`.
+    "tables.rs:.*replace \\| with \\^ in SensorCaptureProg::metric",
+    # `expected == ANY` vs `!=` in `fuzzy`: `fuzzy` is private and only scores the
+    # constant CAPTURE_PROGRAMS, none of whose major, minor, build or u1 fields is
+    # the 0xffff wildcard. For those, the original scores a field 2 (equal) or 0,
+    # the mutant 2 or 1: the same order per field, and the metric compares fields
+    # lexicographically (base-4 digits), so every comparison between candidates,
+    # ties included, is unchanged; and `m > 0` holds either way because the major
+    # field, filtered to be equal, scores 2. tests/proto_boundaries.rs checks the
+    # selection against the reference over every table value (it would catch the
+    # mutant if a wildcard entry were ever added).
+    "tables.rs:.*replace == with != in fuzzy",
+    # `b.len() < 0x4c` vs `<=`: at exactly 0x4c bytes, `resize(0x4c, 0)` is a no-op.
+    "db.rs:.*replace < with <= in identity_to_bytes",
+    # `count > 1` vs `>=` in `Line::transformed`: the only lines built (in
+    # `line_update_type_1`) have count 2 or 3 (`cnt << 20`, with `pc + 1` below
+    # 0x10000 since a timeslot table is a chunk of at most 0xffff bytes) or 0 (the
+    # calibration lines, `i | 0x85 << 24` with i < 112). Count 1 never occurs.
+    "scanner.rs:.*replace > with >= in Line::transformed",
+    # The six `|` of `line_update_type_1` join disjoint bit fields, so `|` equals
+    # `^`: `(pc + 1) | (cnt << 20) | 0x0700_0000` (pc + 1 <= 0xffff, as above;
+    # cnt is 2 or 3: bits 20-21; bits 24-26), `(u - 1) | 8` (`bitpack` returns
+    # 1 <= u <= 8, so u - 1 <= 7) and `i | (0x85 << 24)` (i < 112).
+    "scanner.rs:.*replace \\| with \\^ in Scanner::line_update_type_1",
 ]
