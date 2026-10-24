@@ -65,7 +65,7 @@ phase_install() {
     printf '%s\n' "$out" | sed 's/^/    /'
     printf '%s\n' "$out" | grep -E '^(W|E):' && fail "apt update warned"
     expect "$REPO trixie/main amd64 Packages" apt-cache policy validity-daemon
-    expect 'o=validity-rs,a=trixie,n=trixie,l=validity-rs,c=main' apt-cache policy validity-daemon
+    expect 'o=validity-rs,a=trixie,n=trixie,l=validity-rs,c=main' apt-cache policy
 
     say "apt install validity-daemon"
     apt-get install -y --no-install-recommends validity-daemon
