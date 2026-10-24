@@ -1562,6 +1562,8 @@ fn a_claim_while_suspended_waits_for_the_resume() {
         let (r, took) = claimer.join().unwrap();
         r.expect("the claim succeeds once the sensor is back");
         assert!(took >= Duration::from_millis(250), "claimed after {took:?}");
+        // As soon as the sensor is back, not when the ready wait (3 s) ends.
+        assert!(took < Duration::from_millis(2500), "claimed after {took:?}");
     });
 }
 
@@ -1608,36 +1610,45 @@ fn release_stops_watching_the_client() {
         let (c, d) = env.device().await;
         ready(&d).await;
         let me = c.unique_name().unwrap().to_string();
-        // A monitor sees the daemon drop the match rule it added to notice
-        // this client leaving the bus.
+        // A monitor sees the daemon add, then drop, the match rule with which
+        // it notices this client leaving the bus.
         let monitor = env.client().await;
         let mut seen = zbus::MessageStream::from(&monitor);
         zbus::fdo::MonitoringProxy::new(&monitor)
             .await
             .unwrap()
             .become_monitor(
-                &[zbus::MatchRule::try_from("type='method_call',member='RemoveMatch'").unwrap()],
+                &[
+                    zbus::MatchRule::try_from("type='method_call',member='AddMatch'").unwrap(),
+                    zbus::MatchRule::try_from("type='method_call',member='RemoveMatch'").unwrap(),
+                ],
                 0,
             )
             .await
             .unwrap();
+        let mut next_rule = async |member: &str| {
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                let left = end.saturating_duration_since(Instant::now());
+                let m = next_with_timeout(&mut seen, left)
+                    .await
+                    .unwrap_or_else(|| panic!("no {member} for the client's watch"))
+                    .unwrap();
+                if m.header().member().map(|n| n.as_str()) != Some(member) {
+                    continue;
+                }
+                let rule: String = m.body().deserialize().unwrap();
+                if rule.contains("NameOwnerChanged") && rule.contains(&me) {
+                    return;
+                }
+            }
+        };
         d.claim("").await.unwrap();
+        // The watch is in place (it is set up after the reply)...
+        next_rule("AddMatch").await;
         d.release().await.unwrap();
-        let end = Instant::now() + Duration::from_secs(5);
-        loop {
-            let left = end.saturating_duration_since(Instant::now());
-            let m = next_with_timeout(&mut seen, left)
-                .await
-                .expect("the daemon removes its watch of the released client")
-                .unwrap();
-            if m.header().member().map(|n| n.as_str()) != Some("RemoveMatch") {
-                continue;
-            }
-            let rule: String = m.body().deserialize().unwrap();
-            if rule.contains("NameOwnerChanged") && rule.contains(&me) {
-                break;
-            }
-        }
+        // ... and gone with the claim.
+        next_rule("RemoveMatch").await;
         // The client is still on the bus.
         assert!(d.list_enrolled_fingers("").await.is_err());
     });

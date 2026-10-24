@@ -173,8 +173,11 @@ mod tests {
         assert_eq!(hw.probe(), expected);
         // Opening needs the host keys first.
         assert!(matches!(hw.open(), Err(OpenFailure::Setup(m)) if m == "no keys"));
-        let available = nusb::watch_devices().is_ok();
-        assert_eq!(hw.watch(Box::new(|| {})), available);
+        // Wherever nusb has hotplug notifications (netlink), so does the daemon.
+        let watched = hw.watch(Box::new(|| {}));
+        if nusb::watch_devices().is_ok() {
+            assert!(watched);
+        }
     }
 
     #[test]

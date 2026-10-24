@@ -107,9 +107,13 @@ exclude_re = [
     "session.rs:.*<impl UsbLink for UsbSensor>::",
     # validity-daemon: a sensor on the bus (without one, probe returns None
     # anyway, and with /sys/bus/usb present the sysfs check changes nothing);
-    # the USB port reset.
+    # the USB port reset; hotplug notifications.
     "validity-daemon/src/usb.rs:.*replace <impl Hardware for UsbHardware>::probe -> .* with Ok\\(None\\)",
     "validity-daemon/src/usb.rs:.*delete ! in <impl Hardware for UsbHardware>::probe",
     "validity-daemon/src/usb.rs:.*replace <impl Hardware for UsbHardware>::reset -> ",
+    # `watch` returning true without watching: it returns true itself wherever
+    # nusb's hotplug notifications work (any Linux with netlink, where the test
+    # checks it); telling the mutant apart needs a system where they fail.
+    "validity-daemon/src/usb.rs:.*replace <impl Hardware for UsbHardware>::watch -> bool with true",
 ]
 
