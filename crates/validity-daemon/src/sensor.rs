@@ -512,6 +512,7 @@ mod tests {
         cleared: usize,
         paused: Duration,
         waits: Vec<Wait>,
+        open: bool,
     }
 
     impl Sensor for Probe {
@@ -519,7 +520,7 @@ mod tests {
             Ok(vec![0, 0])
         }
         fn is_open(&self) -> bool {
-            true
+            self.open
         }
         fn open_channel(&mut self, _: &[u8]) -> Result<(), ProtoError> {
             Ok(())
@@ -564,6 +565,7 @@ mod tests {
                 cleared: 0,
                 paused: Duration::ZERO,
                 waits: Vec::new(),
+                open: true,
             },
             cancel,
             canceller.clone(),
@@ -661,5 +663,145 @@ mod tests {
                 fin(false, false)
             ]
         );
+    }
+
+    #[test]
+    fn open_follows_the_session() {
+        let (mut g, _, _) = guarded(vec![]);
+        assert!(g.is_open());
+        g.inner.open = false;
+        assert!(!g.is_open());
+    }
+
+    #[test]
+    fn debug_shows_the_run_and_finger_state() {
+        let (mut g, _, _) = guarded(vec![vec![0, 1, 2, 3, 4]]);
+        assert_eq!(
+            format!("{g:?}"),
+            "Guarded { op: 0, in_capture: false, finger: (false, false), .. }"
+        );
+        g.set_op(3);
+        g.cmd(&[CMD_CAPTURE]).unwrap();
+        g.wait_int().unwrap();
+        assert_eq!(
+            format!("{g:?}"),
+            "Guarded { op: 3, in_capture: true, finger: (false, true), .. }"
+        );
+    }
+
+    #[test]
+    fn only_the_end_of_all_runs_resets_the_finger_state() {
+        let (mut g, _, seen) = guarded(vec![vec![0, 1, 2, 3, 4], vec![2, 0, 0, 0, 0]]);
+        let fin = |present, needed| Event::Finger { present, needed };
+        g.set_op(1);
+        g.cmd(&[CMD_CAPTURE]).unwrap();
+        g.wait_int().unwrap();
+        // The next run of the same capture keeps it.
+        g.set_op(2);
+        assert_eq!(*seen.lock().unwrap(), [fin(false, true)]);
+        // No run: the capture is over.
+        g.set_op(0);
+        assert_eq!(*seen.lock().unwrap(), [fin(false, true), fin(false, false)]);
+        g.wait_int().unwrap();
+        assert_eq!(seen.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_capture_is_done_only_with_bit_2() {
+        let (mut g, _, seen) = guarded(vec![
+            vec![0, 1, 2, 3, 4],
+            vec![2, 0, 0, 0, 0],
+            vec![3, 0, 1, 0, 0],
+            vec![3, 0, 0x0b, 0, 0],
+            vec![3],
+        ]);
+        g.set_op(1);
+        g.cmd(&[CMD_CAPTURE]).unwrap();
+        for _ in 0..5 {
+            g.wait_int().unwrap();
+        }
+        g.cmd(&[CMD_CAPTURE_STOP]).unwrap();
+        let fin = |present, needed| Event::Finger { present, needed };
+        // Interrupt 3 without bit 2 of byte 2 (or without byte 2) is not the end.
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [fin(false, true), fin(true, true), fin(false, false)]
+        );
+    }
+
+    /// Log records of this test binary, for the warnings tests look for.
+    fn logged() -> &'static StdMutex<Vec<String>> {
+        struct Capture(StdMutex<Vec<String>>);
+        impl log::Log for Capture {
+            fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+                true
+            }
+            fn log(&self, r: &log::Record<'_>) {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(format!("{} {}", r.level(), r.args()));
+            }
+            fn flush(&self) {}
+        }
+        static LOGGER: std::sync::OnceLock<&'static Capture> = std::sync::OnceLock::new();
+        let l = LOGGER.get_or_init(|| {
+            let l: &'static Capture = Box::leak(Box::new(Capture(StdMutex::new(Vec::new()))));
+            log::set_logger(l).expect("no other logger in the unit tests");
+            log::set_max_level(log::LevelFilter::Trace);
+            l
+        });
+        &l.0
+    }
+
+    #[test]
+    fn an_unreadable_calibration_file_is_reported_a_missing_one_is_not() {
+        let logs = logged();
+        let dir = std::env::temp_dir().join(format!("vd-sensor-cal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let open = |cal: &Path| {
+            let f = crate::fake::FakeSensor::new();
+            let o = f.hardware().open().unwrap();
+            let mut g = Guarded::new(o.session, o.cancel, Canceller::new(), Arc::new(|_| {}));
+            open_session(&mut g, &crate::fake::blobs(), cal).unwrap();
+        };
+        let about = |p: &Path| {
+            let p = p.display().to_string();
+            logs.lock()
+                .unwrap()
+                .iter()
+                .filter(|l| l.contains(&p))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        // Missing: calibrated and saved, no warning.
+        let missing = dir.join("calibration.bin");
+        open(&missing);
+        assert_eq!(
+            about(&missing),
+            [format!("INFO calibration saved to {}", missing.display())]
+        );
+        // Unreadable (a directory): ignored, with a warning; saving fails too.
+        let unreadable = dir.join("cal-dir");
+        std::fs::create_dir_all(&unreadable).unwrap();
+        open(&unreadable);
+        let lines = about(&unreadable);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines[0].starts_with(&format!(
+                "WARN ignoring calibration file {}: ",
+                unreadable.display()
+            )),
+            "{lines:?}"
+        );
+        assert!(
+            lines[1].starts_with(&format!(
+                "WARN could not save calibration to {}: ",
+                unreadable.display()
+            )),
+            "{lines:?}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

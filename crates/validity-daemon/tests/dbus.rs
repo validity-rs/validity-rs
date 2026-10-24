@@ -1526,6 +1526,123 @@ fn verify_start_reply_precedes_its_signals() {
     });
 }
 
+#[test]
+fn a_claim_while_suspended_waits_for_the_resume() {
+    let env = Env::with(|_| {}, true, true);
+    zbus::block_on(async {
+        let logind = env.logind.as_ref().unwrap();
+        let (_c, d) = env.device().await;
+        ready(&d).await;
+        wait_until("the inhibitor", async || logind.inhibitors() == 1).await;
+        logind.prepare_for_sleep(true).await;
+        wait_until("the inhibitor release", async || {
+            logind.inhibitor_released(0)
+        })
+        .await;
+        // The claim comes from another client while the sensor sleeps; the
+        // ready wait (3 s here) covers a resume 300 ms later.
+        let address = env.bus.address.clone();
+        let claimer = std::thread::spawn(move || {
+            zbus::block_on(async {
+                let c = zbus::connection::Builder::address(address.as_str())
+                    .build()
+                    .await
+                    .unwrap();
+                let d = DeviceProxy::new(&c).await.unwrap();
+                let t = Instant::now();
+                let r = d.claim("").await;
+                if r.is_ok() {
+                    d.release().await.unwrap();
+                }
+                (r, t.elapsed())
+            })
+        });
+        sleep(Duration::from_millis(300)).await;
+        logind.prepare_for_sleep(false).await;
+        let (r, took) = claimer.join().unwrap();
+        r.expect("the claim succeeds once the sensor is back");
+        assert!(took >= Duration::from_millis(250), "claimed after {took:?}");
+    });
+}
+
+#[test]
+fn finger_present_is_signalled() {
+    let env = Env::new(|f| f.enroll_directly(&alice_sid(), 2, 1));
+    zbus::block_on(async {
+        let (c, d) = env.device().await;
+        ready(&d).await;
+        let props = zbus::fdo::PropertiesProxy::builder(&c)
+            .destination("net.reactivated.Fprint")
+            .path("/net/reactivated/Fprint/Device/0")
+            .build()
+            .await
+            .unwrap();
+        let mut changes = props.receive_properties_changed().await.unwrap();
+        d.claim("").await.unwrap();
+        let mut vs = verify_stream(d.receive_verify_status().await.unwrap());
+        d.verify_start("any").await.unwrap();
+        assert!(env.fake.wait_for_capture(Duration::from_secs(5)));
+        env.fake.touch([Touch::Finger(1)]);
+        assert_eq!(statuses(&mut vs).await, ["verify-match"]);
+        // finger-present goes true when the finger is detected, false when
+        // the capture is over.
+        let mut present = Vec::new();
+        while present != [true, false] {
+            let sig = next_with_timeout(&mut changes, Duration::from_secs(5))
+                .await
+                .unwrap_or_else(|| panic!("finger-present changes so far: {present:?}"));
+            let args = sig.args().unwrap();
+            if let Some(v) = args.changed_properties().get("finger-present") {
+                present.push(bool::try_from(v).unwrap());
+            }
+        }
+        d.verify_stop().await.unwrap();
+        d.release().await.unwrap();
+    });
+}
+
+#[test]
+fn release_stops_watching_the_client() {
+    let env = Env::new(|_| {});
+    zbus::block_on(async {
+        let (c, d) = env.device().await;
+        ready(&d).await;
+        let me = c.unique_name().unwrap().to_string();
+        // A monitor sees the daemon drop the match rule it added to notice
+        // this client leaving the bus.
+        let monitor = env.client().await;
+        let mut seen = zbus::MessageStream::from(&monitor);
+        zbus::fdo::MonitoringProxy::new(&monitor)
+            .await
+            .unwrap()
+            .become_monitor(
+                &[zbus::MatchRule::try_from("type='method_call',member='RemoveMatch'").unwrap()],
+                0,
+            )
+            .await
+            .unwrap();
+        d.claim("").await.unwrap();
+        d.release().await.unwrap();
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let left = end.saturating_duration_since(Instant::now());
+            let m = next_with_timeout(&mut seen, left)
+                .await
+                .expect("the daemon removes its watch of the released client")
+                .unwrap();
+            if m.header().member().map(|n| n.as_str()) != Some("RemoveMatch") {
+                continue;
+            }
+            let rule: String = m.body().deserialize().unwrap();
+            if rule.contains("NameOwnerChanged") && rule.contains(&me) {
+                break;
+            }
+        }
+        // The client is still on the bus.
+        assert!(d.list_enrolled_fingers("").await.is_err());
+    });
+}
+
 // ------------------------------------------------- interface conformance
 
 /// fprintd 1.94.5's API (net.reactivated.Fprint.{Manager,Device}.xml).

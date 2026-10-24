@@ -869,3 +869,44 @@ pub async fn termination() {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::machine::DeviceState;
+
+    fn ctx() -> Arc<Ctx> {
+        let (commands, _) = mpsc::channel();
+        Arc::new(Ctx {
+            machine: Mutex::new(Machine::new()),
+            changed: zruntime::Event::new(),
+            commands,
+            canceller: Canceller::new(),
+            deps: Deps {
+                authority: Arc::new(polkit::Polkit),
+                users: Arc::new(crate::users::SystemUsers),
+                sids: SidMap::default(),
+            },
+            opts: Options::default(),
+            watchers: Mutex::new(HashMap::new()),
+        })
+    }
+
+    #[test]
+    fn debug_output() {
+        let ctx = ctx();
+        assert_eq!(
+            format!("{:?}", ctx.deps),
+            format!("Deps {{ sids: {:?}, .. }}", SidMap::default())
+        );
+        assert_eq!(format!("{:?}", Manager { ctx: ctx.clone() }), "Manager");
+        let dev = Device { ctx: ctx.clone() };
+        assert_eq!(format!("{dev:?}"), "Device { state: Some(Opening), .. }");
+        ctx.m().device = DeviceState::Ready;
+        assert_eq!(format!("{dev:?}"), "Device { state: Some(Ready), .. }");
+        // Never waits for the state lock.
+        let held = ctx.m();
+        assert_eq!(format!("{dev:?}"), "Device { state: None, .. }");
+        drop(held);
+    }
+}
