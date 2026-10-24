@@ -1,0 +1,5 @@
+# Installing the APT source is this package's purpose: it is the bootstrap of
+# the project's own repository (not a Debian archive package), the way
+# third-party keyring packages are. The source trusts its key for this
+# repository only (Signed-By).
+validity-rs-archive-keyring: package-installs-apt-sources [etc/apt/sources.list.d/validity-rs.sources]

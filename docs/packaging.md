@@ -10,6 +10,7 @@ ci/packages/run.sh                 # every job below
 ci/packages/run.sh source          # the vendored source tarball
 ci/packages/run.sh debian          # build, lintian, install/smoke/remove cycle
 ci/packages/run.sh repro           # build the .deb twice and compare
+ci/packages/run.sh apt             # APT repository: install, then unattended upgrade
 PKG_CPUS=16-19 ci/packages/run.sh debian   # keep the containers on some CPUs
 VENDOR_ONLINE=1 ci/packages/run.sh debian  # the cycle also downloads Lenovo's package
 ```
@@ -145,6 +146,135 @@ daemon logs that it has no sleep inhibitor and carries on.
 `SOURCE_DATE_EPOCH` (the commit time) fixes every timestamp: the tarball, the
 files in the package and the archive members. `ci/packages/run.sh repro` builds
 the .deb twice from the same tarball and compares the files.
+
+## APT repository
+
+The repository Debian users install from, and through which unattended-upgrades
+keeps validity-daemon current. It is published as a static tree on GitHub
+Pages, from the `gh-pages` branch of `validity-rs/apt`, at
+`https://validity-rs.github.io/apt`:
+
+```
+dists/trixie/{InRelease,Release,Release.gpg}    signed (ed25519 subkey, SHA-512)
+dists/trixie/main/binary-amd64/Packages{,.gz,.xz}
+pool/main/v/validity-daemon/validity-daemon_<version>_amd64.deb
+pool/main/v/validity-rs-archive-keyring/validity-rs-archive-keyring_<version>_all.deb
+validity-rs-archive-keyring.gpg                 the public key (bootstrap)
+validity-rs.sources                             the APT source (bootstrap)
+```
+
+`ci/packages/apt-repo.sh` writes the tree from a set of .deb files (it is a
+function of them: each publication rebuilds it) with `apt-ftparchive`, signs
+`InRelease` and `Release.gpg`, and checks both signatures against the public key
+users get. Release fields: `Origin: validity-rs`, `Label: validity-rs`,
+`Suite`/`Codename: trixie`, `Components: main`, `Architectures: amd64`.
+
+### On a user's machine
+
+One package, `validity-rs-archive-keyring` (built by
+`ci/packages/build-keyring.sh`, lintian clean), installs, like Debian's own
+keyring packages:
+
+| File | What |
+|---|---|
+| `/usr/share/keyrings/validity-rs-archive-keyring.gpg` | the key, outside apt's global trust |
+| `/etc/apt/sources.list.d/validity-rs.sources` | the source, deb822, `Signed-By:` that keyring only |
+| `/etc/apt/apt.conf.d/50validity-rs` | `Unattended-Upgrade::Origins-Pattern`: `origin=validity-rs,codename=${distro_codename},label=validity-rs` |
+
+`Signed-By` scopes the key to this repository: it cannot sign for Debian or any
+other source, and Debian's keys cannot sign for this one (the APT test checks
+the latter). The two files in `/etc` are conffiles. Upgrades of the package
+carry key rotations.
+
+Bootstrap, once:
+
+```bash
+curl -fsSLO https://validity-rs.github.io/apt/validity-rs-archive-keyring.gpg
+gpg --show-keys --with-fingerprint validity-rs-archive-keyring.gpg
+#   must show 59CB F35F 3147 A424 BE25  DF07 8F4B 8482 B486 C8FD
+sudo install -m 0644 validity-rs-archive-keyring.gpg /usr/share/keyrings/
+sudo curl -fsSL -o /etc/apt/sources.list.d/validity-rs.sources \
+    https://validity-rs.github.io/apt/validity-rs.sources
+sudo apt update
+sudo apt install validity-rs-archive-keyring validity-daemon unattended-upgrades
+```
+
+From then on `apt upgrade`, or unattended-upgrades on its own, brings new
+versions.
+
+### The key
+
+| | Fingerprint | Expires |
+|---|---|---|
+| primary, ed25519, certify only | `59CBF35F3147A424BE25DF078F4B8482B486C8FD` | 2036-10-24 |
+| signing subkey, ed25519 | `1272C48B1B8C9FC58C331C89F9CCE85370BBD5B9` | 2029-10-24 |
+
+User ID: `validity-rs archive signing key <409744+pierre-warnier@users.noreply.github.com>`.
+The public key is `packaging/apt/validity-rs-archive-keyring.gpg`.
+
+Why ed25519: Debian's own trixie release key is ed25519, and trixie's apt
+verifies with Sequoia's `sqv`, whose policy
+(`/usr/share/apt/default-sequoia.config`) accepts it without an end date (it
+retires RSA-2048 in 2030, DSA already). An RSA-4096 key would work too, but has
+larger signatures and no advantage here.
+
+The primary key never leaves the maintainer's offline copy (a GnuPG home
+outside every repository; add a passphrase with `gpg --change-passphrase` and
+keep a backup offline; its revocation certificate is in
+`openpgp-revocs.d/`). CI only ever holds the **signing subkey**, exported with
+a stub in place of the primary:
+
+```bash
+export GNUPGHOME=<offline GnuPG home>
+gpg --armor --export-secret-subkeys '1272C48B1B8C9FC58C331C89F9CCE85370BBD5B9!' >APT_SIGNING_KEY.asc
+gpg --list-packets APT_SIGNING_KEY.asc | grep gnu-dummy   # the primary is only a stub
+# A GitHub environment "apt" that only tags may deploy to, holding the secret:
+gh api -X PUT repos/validity-rs/validity-rs/environments/apt \
+    -F 'deployment_branch_policy[protected_branches]=false' \
+    -F 'deployment_branch_policy[custom_branch_policies]=true'
+gh api -X POST repos/validity-rs/validity-rs/environments/apt/deployment-branch-policies \
+    -f name='v*' -f type=tag
+gh secret set APT_SIGNING_KEY --env apt -R validity-rs/validity-rs <APT_SIGNING_KEY.asc
+shred -u APT_SIGNING_KEY.asc
+```
+
+Rotation (the subkey expires in 2029, or at once if it leaks):
+
+1. With the primary key, add a new signing subkey
+   (`gpg --quick-add-key <primary> ed25519 sign <expiry>`), or extend the old one
+   (`gpg --quick-set-expire <primary> <expiry> <subkey>`).
+2. Export the public key again into `packaging/apt/validity-rs-archive-keyring.gpg`,
+   add an entry to `packaging/apt/keyring/changelog`, release: the new keyring
+   package reaches every machine through the repository, still signed by the
+   old subkey.
+3. Once that release is out, replace the `APT_SIGNING_KEY` secret with the new
+   subkey. After a leak, also revoke the old subkey
+   (`gpg --edit-key <primary>`, `key <n>`, `revkey`) and republish the key.
+
+Losing the primary key means a new key, distributed by hand (the bootstrap
+above), so its offline backup matters more than anything else here.
+
+`Valid-Until` is not set in `Release`: it would protect against a replayed old
+repository, but every client would stop updating if a scheduled re-signing ever
+failed. That trade-off can be revisited once publication is routine.
+
+### The APT test
+
+`ci/packages/run.sh apt`, in CI:
+
+1. Builds the .deb, and a rebuild at Debian revision 2 as "the next release".
+2. In the build image, without network: makes a **throwaway key** laid out like
+   the real one, builds the keyring package with it, and writes two
+   repositories: `v1` (revision 1) and `v2` (revision 2).
+3. Serves `v1` over HTTP from one container. A clean trixie with systemd (and
+   nothing else) bootstraps from it as above, checks that Debian's key is
+   refused for this repository, runs `apt update` (no warning allowed),
+   `apt install validity-daemon`, and `fingerprint-settings` when its .deb is
+   there (from the sibling repository's `dist/debian`, otherwise skipped with a
+   notice), and installs unattended-upgrades.
+4. Publishes `v2` on the server; `unattended-upgrade --dry-run` must list
+   validity-daemon and change nothing, then `unattended-upgrade` must upgrade it
+   to revision 2 and restart the running daemon.
 
 ## The source tarball
 

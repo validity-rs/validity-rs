@@ -1,0 +1,9 @@
+# validity-rs APT repository (validity-daemon and its companions), Debian 13.
+# Installed by validity-rs-archive-keyring. The key in Signed-By is trusted for
+# this repository only: it cannot sign for any other source.
+Types: deb
+URIs: https://validity-rs.github.io/apt
+Suites: trixie
+Components: main
+Architectures: amd64
+Signed-By: /usr/share/keyrings/validity-rs-archive-keyring.gpg

@@ -1,0 +1,7 @@
+// validity-rs: let unattended-upgrades install updates from the validity-rs
+// APT repository (validity-rs.sources), in addition to the origins the
+// distribution's own 50unattended-upgrades allows. Installed by
+// validity-rs-archive-keyring.
+Unattended-Upgrade::Origins-Pattern {
+        "origin=validity-rs,codename=${distro_codename},label=validity-rs";
+};

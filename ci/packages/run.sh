@@ -3,7 +3,7 @@
 # image (no network), then install, smoke-test and remove it in a fresh
 # container of the same distro. .github/workflows/packages.yml calls this.
 #
-#   ci/packages/run.sh                 # source, every distro, repro
+#   ci/packages/run.sh                 # source, every distro, repro, apt
 #   ci/packages/run.sh debian          # one distro (builds the tarball if absent)
 #   ci/packages/run.sh source          # only the vendored source tarball
 #   ci/packages/run.sh apt             # APT repository from the .deb: apt install
@@ -216,7 +216,7 @@ if [ "${1:-}" = --job ]; then
     exit
 fi
 jobs=("$@")
-[ ${#jobs[@]} -eq 0 ] && jobs=(source "${DISTROS[@]}" repro)
+[ ${#jobs[@]} -eq 0 ] && jobs=(source "${DISTROS[@]}" repro apt)
 for j in "${jobs[@]}"; do
     declare -F "job_$j" >/dev/null || { echo "unknown job: $j" >&2; exit 2; }
 done

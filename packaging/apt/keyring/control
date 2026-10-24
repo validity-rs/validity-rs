@@ -1,0 +1,14 @@
+Package: validity-rs-archive-keyring
+Version: @VERSION@
+Architecture: all
+Maintainer: validity-rs maintainers <409744+pierre-warnier@users.noreply.github.com>
+Section: misc
+Priority: optional
+Multi-Arch: foreign
+Homepage: https://github.com/validity-rs/validity-rs
+Description: OpenPGP key and APT source of the validity-rs repository
+ Installs the key that signs the validity-rs APT repository, in its own
+ keyring (trusted for that repository only, through Signed-By), the APT
+ source of the repository, and an unattended-upgrades setting that lets
+ automatic updates come from it. Upgrades of this package carry key
+ rotations.
