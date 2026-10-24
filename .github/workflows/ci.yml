@@ -134,6 +134,49 @@ jobs:
           name: fuzz-artifacts
           path: fuzz/artifacts
 
+  mutants:
+    # The code a push or pull request changed; the weekly run takes it all.
+    name: Mutation testing (changed code)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The diff is against the previous tip, anywhere in the history.
+          fetch-depth: 0
+          persist-credentials: false
+      - run: ci/run.sh mutants-diff
+        env:
+          # A push: the previous tip; a pull request: its base.
+          MUTANTS_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutants-out
+          path: mutants.out
+
+  mutants-full:
+    # All the code, in slices that each fit a runner's time limit.
+    name: Mutation testing (full, ${{ matrix.shard }}/8)
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: ci/run.sh mutants
+        env:
+          MUTANTS_SHARD: ${{ matrix.shard }}/8
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutants-out-${{ matrix.shard }}
+          path: mutants.out
+
   msrv:
     # Keep in step with rust-version in Cargo.toml.
     name: MSRV (1.99.0)

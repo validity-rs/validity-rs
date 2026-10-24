@@ -1,6 +1,12 @@
-# cargo-mutants configuration. Every exclusion is an *equivalent* mutant: the change
-# has no observable effect, so no test can catch it. Each one is argued below; do
-# not add an entry without the same.
+# cargo-mutants configuration. Every exclusion is an *equivalent* mutant (the change
+# has no observable effect, so no test can catch it), except the last group: code
+# that only runs against a real USB device. Each one is argued below; do not add
+# an entry without the same.
+# The workspace denies every warning, so a mutant that, say, replaces a function body
+# leaves an unused import and fails to build: it would be counted "unviable" instead
+# of being tested. Lints are not what mutation testing measures, so cap them here.
+cap_lints = true
+
 exclude_re = [
     # `while out.len() < len` vs `<=`: one extra HMAC block is computed, then the
     # output is truncated to `len`; the result is identical.
@@ -52,4 +58,58 @@ exclude_re = [
     # so a line of exactly 24 bytes cannot end with the space that `b[23] == b' '`
     # requires; both versions then fall through to the `LEVEL:logger:` form.
     "replay.rs:.*replace > with >= in message",
+    # validity-daemon `classify`: the arm `Channel(Transport(_)) => Lost` is
+    # followed by `Channel(_) => Lost`, which matches the same errors with the
+    # same result, so deleting the first arm changes nothing.
+    "errors.rs:.*delete match arm ProtoError::Channel\\(validity_proto::channel::Error::Transport\\(_\\)\\) in classify",
+    # `(e.mask << 1) | 1` vs `^ 1` in the emulator's enrolment update: the low
+    # bit of `mask << 1` is zero, so `| 1` equals `^ 1`.
+    "fake.rs:.*replace \\| with \\^ in FakeChip::enrollment_update",
+    # `!st.waiting && self.capture == Capture::Waiting` vs `||` in the
+    # emulator's finger wait: the loop is entered only with the capture
+    # waiting and returns as soon as it changes, so the second operand is
+    # always true there; the mutant only sets `waiting` again when it is
+    # already set, with a notify_all that wakes waiters which re-check their
+    # condition. (The regex also names the `&&` of the let chain a few lines
+    # above, a mutant that does not build: a `let` is no operand of `||`.)
+    "fake.rs:.*replace && with \\|\\| in <impl Sensor for FakeChip>::wait_for",
+    # `FakeSensor::changed` (notify_all) with `()`: every waiter re-checks
+    # within 10 ms without it. FakeChip::wait_for waits for a touch with
+    # wait_timeout(10 ms) in a loop, and wait_for_capture waits for `waiting`,
+    # whose setter notifies the condition variable itself. A lost notification
+    # only delays a waiter by at most 10 ms, which no test can tell from
+    # scheduling noise.
+    "fake.rs:.*replace FakeSensor::changed with \\(\\)",
+    # `Instant::now() < t` vs `<=` (the reappear window in Worker::probe): the
+    # two differ only when the monotonic clock reads exactly the deadline, to
+    # the nanosecond, where either answer (still expected back, or not) is
+    # what "for this long" means.
+    "worker.rs:.*replace < with <= in Worker<H>::probe",
+
+    # Not equivalent, but unreachable without the hardware: the code below
+    # talks to a real USB device (nusb endpoints, the device handle), which no
+    # test can have without a supported sensor plugged in. The hardware probe
+    # and session examples run it on the T480 (README, "Hardware tests").
+    # Everything else in these files is tested without a sensor
+    # (validity-proto's tests/sensor_defaults.rs: what find_supported returns,
+    # the open_wait deadline; validity-daemon's usb tests: probe, open and
+    # hotplug).
+    #
+    # validity-proto: the reply and image buffer sizes, used by the transfers
+    # only; a found sensor (find_supported with no sensor returns nothing
+    # anyway); the device's Debug; the transfers and the port reset; and
+    # UsbLink, which forwards to them.
+    "validity-proto/src/usb.rs:[0-9]+:[0-9]+: replace \\* with ",
+    "validity-proto/src/usb.rs:.*replace find_supported -> .* with Ok\\(vec!\\[\\]\\)",
+    "validity-proto/src/usb.rs:.*<impl core::fmt::Debug for UsbSensor>::fmt",
+    "validity-proto/src/usb.rs:.*replace UsbSensor::(wait_int|read_82|reset) ",
+    "validity-proto/src/usb.rs:.*<impl Transport for UsbSensor>::cmd",
+    "session.rs:.*<impl UsbLink for UsbSensor>::",
+    # validity-daemon: a sensor on the bus (without one, probe returns None
+    # anyway, and with /sys/bus/usb present the sysfs check changes nothing);
+    # the USB port reset.
+    "validity-daemon/src/usb.rs:.*replace <impl Hardware for UsbHardware>::probe -> .* with Ok\\(None\\)",
+    "validity-daemon/src/usb.rs:.*delete ! in <impl Hardware for UsbHardware>::probe",
+    "validity-daemon/src/usb.rs:.*replace <impl Hardware for UsbHardware>::reset -> ",
 ]
+

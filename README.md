@@ -112,6 +112,7 @@ cargo test -p validity-proto <name>          # one test
 ci/run.sh                                    # quick CI set
 ci/run.sh all                                # everything (needs docker)
 ci/run.sh distro:fedora                      # one job
+ci/run.sh mutants-diff                       # mutation testing of the last commit
 ```
 
 `ci/run.sh` is the CI: GitHub Actions calls the same jobs, inside pinned Debian 13
@@ -135,6 +136,11 @@ tested too. The checks are:
   `pamtester`) and a real polkit.
 - **Fuzzing** of every parser and of the handshake: 30 s per target on each push,
   10 minutes weekly.
+- **Mutation testing** (cargo-mutants) of both crates: every mutant must make a test
+  fail. The code a push changes is checked on that push (`ci/run.sh mutants-diff`),
+  all of it weekly (`ci/run.sh mutants`). The exceptions are argued one by one in
+  `.cargo/mutants.toml`: equivalent mutants, and the few functions that only run
+  against a real USB device.
 - **Supply chain and repository hygiene:**
   - cargo-deny for licences, advisories, duplicates and sources;
   - a daily RustSec audit;

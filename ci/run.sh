@@ -3,7 +3,7 @@
 # run means a green CI run.
 #
 #   ci/run.sh                 # quick: noai gitleaks fmt clippy test doc
-#   ci/run.sh all             # quick + msrv deny distro e2e (needs docker)
+#   ci/run.sh all             # quick + msrv deny distro e2e fuzz mutants-diff (needs docker)
 #   ci/run.sh clippy distro   # selected jobs
 #   ci/run.sh distro:fedora   # one distro
 #
@@ -145,10 +145,48 @@ job_fuzz() {
         sh -c "$loop"
     fi
 }
+# Mutation testing (cargo-mutants, in the Debian image), on the crates of
+# MUTANTS_CRATES: every mutant must be caught, except those argued in
+# .cargo/mutants.toml.
+#   mutants        all their code (weekly, in MUTANTS_SHARD=k/n slices; and on demand)
+#   mutants-diff   only their code changed since MUTANTS_BASE (default: the previous
+#                  commit; an unknown base, as for a new branch, means the previous
+#                  commit too), on every push
+# MUTANTS_JOBS (default 2) mutants are built and tested at a time. A mutant that
+# makes the tests hang is killed after cargo-mutants' timeout and counts as caught:
+# its exit status 3 (timeouts, which it reports ahead of missed mutants) passes
+# only when mutants.out/missed.txt is empty. Results: mutants.out/.
+MUTANTS_CRATES=(validity-proto validity-daemon)
+mutants_run() {
+    local args=() p rc=0
+    for p in "${MUTANTS_CRATES[@]}"; do args+=(-p "$p"); done
+    args+=(-j "${MUTANTS_JOBS:-2}" "$@")
+    if use_image; then
+        # The container runs as root: mutants.out goes back to the caller.
+        in_image debian "cargo mutants --version && { cargo mutants ${args[*]}; rc=\$?; \
+            chown -R $(id -u):$(id -g) mutants.out; exit \$rc; }" || rc=$?
+    else
+        cargo mutants "${args[@]}" || rc=$?
+    fi
+    if [ "$rc" -eq 3 ] && [ -f mutants.out/missed.txt ] && [ ! -s mutants.out/missed.txt ]; then
+        echo "no mutant missed; $(wc -l < mutants.out/timeout.txt) made the tests hang (caught)"
+        return 0
+    fi
+    return "$rc"
+}
+job_mutants() { mutants_run ${MUTANTS_SHARD:+--shard "$MUTANTS_SHARD"}; }
+job_mutants-diff() {
+    # In the tree, not in target/: the containers have their own target volume.
+    local base=${MUTANTS_BASE:-HEAD~1} diff=mutants.diff
+    git rev-parse --verify -q "$base^{commit}" >/dev/null || base=HEAD~1
+    git diff "$base" HEAD -- '*.rs' > "$diff"
+    if [ ! -s "$diff" ]; then echo "no Rust change since $base"; return 0; fi
+    mutants_run --in-diff "$diff"
+}
 job_e2e() { in_image e2e ci/e2e/run.sh; }
 
 QUICK=(noai zizmor gitleaks fmt clippy test doc nousb)
-ALL=("${QUICK[@]}" msrv deny distro e2e fuzz)
+ALL=("${QUICK[@]}" msrv deny distro e2e fuzz mutants-diff)
 
 jobs=("$@")
 [ ${#jobs[@]} -eq 0 ] && jobs=("${QUICK[@]}")

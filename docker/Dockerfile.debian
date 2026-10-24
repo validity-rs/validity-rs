@@ -18,5 +18,9 @@ RUN rustup component add clippy rustfmt \
     && rustc --version && cargo clippy --version && cargo fmt --version \
     && dbus-daemon --version | head -1
 
+# cargo-mutants for the mutation-testing jobs (ci/run.sh mutants, mutants-diff).
+RUN cargo install --locked cargo-mutants --version 27.1.0 \
+    && cargo mutants --version
+
 WORKDIR /workspace
 CMD ["/bin/bash"]

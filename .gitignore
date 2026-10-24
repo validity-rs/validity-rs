@@ -9,3 +9,8 @@ CLAUDE.md
 /fuzz/corpus/
 /fuzz/artifacts/
 /fuzz/coverage/
+
+# Mutation testing (ci/run.sh mutants, mutants-diff): results and the diff
+/mutants.out/
+/mutants.out.old/
+/mutants.diff
