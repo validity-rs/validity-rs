@@ -377,9 +377,8 @@ published.
 4. **Provenance**: `actions/attest-build-provenance` v4.2.2 (pinned by commit)
    attests every file, and each attestation is verified at once with
    `gh attestation verify`. GitHub only offers attestations to public
-   repositories on the Free plan: while `validity-rs/validity-rs` is private,
-   a tag fails at this step, so the first release is tagged after the
-   repository is made public.
+   repositories on the Free plan; `validity-rs/validity-rs` is public, so
+   they work. Were it made private, a tag would fail at this step.
 5. **A draft GitHub release** with all files. A maintainer reviews it and
    publishes it.
 6. Publication jobs, each off until its repository variable is `1`:
@@ -444,7 +443,9 @@ touch .nojekyll && git add . && git commit -qm 'APT repository'
 git remote add origin git@github.com:validity-rs/apt.git && git push -u origin gh-pages
 # Pages from gh-pages.
 gh api -X POST repos/validity-rs/apt/pages -f 'source[branch]=gh-pages' -f 'source[path]=/'
-# A deploy key, writable, for that repository only.
+# A deploy key, writable, for that repository only. Deploy keys are off by
+# default in the organisation: allow them first (organisation setting).
+gh api -X PATCH orgs/validity-rs -F deploy_keys_enabled_for_repositories=true
 ssh-keygen -q -t ed25519 -N '' -C 'validity-rs release workflow' -f apt_deploy
 gh repo deploy-key add apt_deploy.pub -R validity-rs/apt --allow-write --title 'validity-rs release workflow'
 # The "apt" environment of validity-rs/validity-rs: tags only, both secrets.
