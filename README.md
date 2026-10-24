@@ -50,7 +50,12 @@ screen lockers and the `fprintd-*` tools keep working unchanged.
    - recovery after suspend;
    - the device always visible with an explicit state;
    - no destructive action taken automatically;
-   - verification only accepts the claimed user's own fingers.
+   - verification only accepts the claimed user's own fingers: any of them for
+     `VerifyStart("any")` (announced as `any`, as fprintd does for a device that
+     identifies), only that one for a named finger. `fprintd-verify` without `-f`
+     names the first listed finger itself, so use `-f any` to accept every finger
+     (`pam_fprintd` always asks for `any`). Enrolling a finger already enrolled,
+     by anyone, ends with `enroll-duplicate` (done), as in fprintd.
 
 ## Layout
 

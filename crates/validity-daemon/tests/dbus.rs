@@ -757,8 +757,10 @@ fn claim_enroll_verify_delete_release() {
 #[test]
 fn verify_never_matches_another_users_finger() {
     let env = Env::new(|f| {
-        // Alice's left index; Bob's right index; a Windows account's thumb.
+        // Alice's left and right index; Bob's right index; a Windows
+        // account's thumb.
         f.enroll_directly(&alice_sid(), 7, 10);
+        f.enroll_directly(&alice_sid(), 2, 11);
         f.enroll_directly(&sid_for_uid(BOB_UID), 2, 20);
         f.enroll_directly(
             &"S-1-5-21-1000000001-1000000002-1000000003-1001"
@@ -786,14 +788,79 @@ fn verify_never_matches_another_users_finger() {
             assert_eq!(env.fake.counters().matches, before + 1);
             d.verify_stop().await.unwrap();
         }
-        // A named finger: the user's other finger does not count.
-        env.fake.enroll_directly(&alice_sid(), 8, 11);
+        // Issue #11, as on the T480: left and right index enrolled, the right
+        // one (not the first listed) placed.
+        assert_eq!(
+            d.list_enrolled_fingers("").await.unwrap(),
+            ["left-index-finger", "right-index-finger"]
+        );
+        let mut sel = d.receive_verify_finger_selected().await.unwrap();
+        let (left, right) = ("left-index-finger", "right-index-finger");
+        for (name, finger, want, announced) in [
+            // "any": every finger of the claimed user counts, and fprintd
+            // announces "any" for a device that identifies.
+            ("any", 11, "verify-match", "any"),
+            ("any", 10, "verify-match", "any"),
+            // Still never another user's record.
+            ("any", 20, "verify-no-match", "any"),
+            ("any", 30, "verify-no-match", "any"),
+            // A named finger: the user's other finger does not count. This is
+            // what fprintd-verify 1.94 sends without -f (the first listed
+            // finger), so the right index is refused there, as with fprintd.
+            (left, 11, "verify-no-match", left),
+            (left, 10, "verify-match", left),
+            (right, 11, "verify-match", right),
+            (right, 20, "verify-no-match", right),
+        ] {
+            env.fake.touch([Touch::Finger(finger)]);
+            d.verify_start(name).await.unwrap();
+            assert_eq!(selected(&mut sel).await, announced, "{name} {finger}");
+            assert_eq!(statuses(&mut vs).await, [want], "{name} {finger}");
+            d.verify_stop().await.unwrap();
+        }
         d.release().await.unwrap();
+    });
+}
+
+/// Issue #11: a finger already enrolled under another user (or a Windows
+/// account) ends the enrolment with exactly `enroll-duplicate`, done, as in
+/// fprintd 1.94, and nothing is written.
+#[test]
+fn enrolling_another_users_finger_reports_enroll_duplicate() {
+    let windows: validity_proto::sid::Sid = "S-1-5-21-1000000001-1000000002-1000000003-1001"
+        .parse()
+        .unwrap();
+    let env = Env::new(|f| {
+        f.enroll_directly(&sid_for_uid(BOB_UID), 2, 20);
+        f.enroll_directly(&windows, 1, 30);
+    });
+    zbus::block_on(async {
+        let (_c, d) = env.device().await;
+        ready(&d).await;
         d.claim("").await.unwrap();
-        env.fake.touch([Touch::Finger(11)]);
-        d.verify_start("left-index-finger").await.unwrap();
-        assert_eq!(statuses(&mut vs).await, ["verify-no-match"]);
-        d.verify_stop().await.unwrap();
+        let mut es = enroll_stream(d.receive_enroll_status().await.unwrap());
+        for finger in [20, 30] {
+            env.fake.touch([Touch::Finger(finger)]);
+            d.enroll_start("right-index-finger").await.unwrap();
+            let first = next_with_timeout(&mut es, Duration::from_secs(5)).await;
+            assert_eq!(
+                first,
+                Some(("enroll-duplicate".to_string(), true)),
+                "finger {finger}"
+            );
+            d.enroll_stop().await.unwrap();
+            assert!(
+                next_with_timeout(&mut es, Duration::from_millis(300))
+                    .await
+                    .is_none()
+            );
+        }
+        assert_eq!(err_name(d.list_enrolled_fingers("").await), NO_PRINTS);
+        assert_eq!(
+            env.fake.records(),
+            [(sid_for_uid(BOB_UID), 2, 20), (windows.clone(), 1, 30)]
+        );
+        assert_eq!(env.fake.pending_touches(), 0);
         d.release().await.unwrap();
     });
 }
