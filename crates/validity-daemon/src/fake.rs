@@ -879,7 +879,7 @@ impl FakeChip {
             0x4b => {
                 let (dbid, len) = (le16(p, 1), le16(p, 3) as usize);
                 let name = &p[5..5 + len];
-                if (len > 0 && name == b"StgWindsor\0") || dbid == STORAGE_ID {
+                if name == b"StgWindsor\0" || dbid == STORAGE_ID {
                     Self::storage_reply(&st())
                 } else {
                     status(NOT_FOUND)
@@ -1145,5 +1145,287 @@ mod tests {
             )))
         ));
         assert!(f.hardware().probe().unwrap().is_none());
+    }
+
+    // ------------------------------------------------ the emulator itself
+
+    fn chip(f: &FakeSensor) -> (FakeChip, CancelHandle) {
+        let o = f.hardware().open().unwrap();
+        (o.session, o.cancel)
+    }
+
+    fn cmd(c: &mut FakeChip, p: &[u8]) -> Vec<u8> {
+        c.reply(p, &blobs()).unwrap()
+    }
+
+    /// A flash command: `op part 0 0 0 addr(le32) n(le32) data`.
+    fn flash_cmd(op: u8, part: u8, addr: u32, n: u32, data: &[u8]) -> Vec<u8> {
+        let mut c = vec![op, part, 0, 0, 0];
+        c.extend(addr.to_le_bytes());
+        c.extend(n.to_le_bytes());
+        c.extend(data);
+        c
+    }
+
+    #[test]
+    fn handles_and_debug_output() {
+        let f = FakeSensor::new();
+        assert_eq!(
+            format!("{f:?}"),
+            format!(
+                "FakeSensor {{ present: true, users: 0, touches: 0, counters: {:?}, .. }}",
+                Counters::default()
+            )
+        );
+        assert_eq!(f.hardware_probe(), Some(VALIDATED));
+        f.touch([Touch::Finger(1), Touch::ScanError]);
+        assert_eq!(f.pending_touches(), 2);
+        // No capture is waiting.
+        assert!(!f.waiting_for_finger());
+        assert!(!f.wait_for_capture(Duration::from_millis(50)));
+        let (mut c, _) = chip(&f);
+        assert_eq!(
+            format!("{c:?}"),
+            "FakeChip { generation: 0, open: false, capture: Idle, .. }"
+        );
+        assert!(!c.is_open());
+        c.open_channel(&[]).unwrap();
+        assert!(c.is_open());
+        f.unplug();
+        assert_eq!(f.hardware_probe(), None);
+    }
+
+    #[test]
+    fn a_waiting_capture_is_visible_and_takes_only_finger_waits() {
+        let f = FakeSensor::new();
+        f.set_finger_deadline(Duration::from_secs(10));
+        let (mut c, _) = chip(&f);
+        // Capture program without calibration lines: armed, then waiting.
+        cmd(&mut c, &[0x02, 0, 0, 0, 0]);
+        assert_eq!(c.wait_for(Wait::CaptureStart).unwrap(), [0, 1, 2, 3, 4]);
+        f.touch([Touch::Finger(3)]);
+        // Only the finger wait takes the touch: any other fails at once.
+        let t = Instant::now();
+        assert!(matches!(
+            c.wait_for(Wait::Capture),
+            Err(ProtoError::Timeout {
+                waiting_for: Wait::Capture,
+                ..
+            })
+        ));
+        assert!(t.elapsed() < Duration::from_secs(5));
+        assert_eq!(f.pending_touches(), 1);
+        assert_eq!(c.wait_for(Wait::Finger).unwrap(), [2, 0, 0, 0, 0]);
+        assert_eq!(f.pending_touches(), 0);
+        // wait_int is an interrupt wait: the capture's completion.
+        assert_eq!(c.wait_int().unwrap(), [3, 0, 6, 0, 0]);
+        // Nothing else will come.
+        assert!(matches!(
+            c.wait_int(),
+            Err(ProtoError::Timeout {
+                waiting_for: Wait::Interrupt,
+                ..
+            })
+        ));
+
+        // A finger wait is visible to the test while it lasts.
+        let (mut c, _) = chip(&f);
+        cmd(&mut c, &[0x02, 0, 0, 0, 0]);
+        c.wait_for(Wait::CaptureStart).unwrap();
+        let waiter = std::thread::spawn(move || c.wait_for(Wait::Finger).map(|_| ()));
+        assert!(f.wait_for_capture(Duration::from_secs(5)));
+        assert!(f.waiting_for_finger());
+        f.touch([Touch::Finger(4)]);
+        waiter.join().unwrap().unwrap();
+        assert!(!f.waiting_for_finger());
+    }
+
+    #[test]
+    fn cancellation_pause_and_reboot() {
+        let f = FakeSensor::new();
+        let (mut c, cancel) = chip(&f);
+        // clear_cancel consumes a pending cancellation.
+        cancel.cancel();
+        c.clear_cancel();
+        assert!(!cancel.take());
+        // A tenth of the asked pause, really slept.
+        let t = Instant::now();
+        c.pause(Duration::from_millis(300));
+        assert!(t.elapsed() >= Duration::from_millis(30));
+        // A reboot ends the session: the next one is a new device.
+        assert_eq!(cmd(&mut c, &[0x05, 2, 0]), OK);
+        assert_eq!(f.counters().reboots, 1);
+        assert!(matches!(
+            c.cmd(&[0x01]),
+            Err(ProtoError::Transport(TransportError::Disconnected))
+        ));
+        let (mut c2, _) = chip(&f);
+        assert!(c2.cmd(&[0x01]).is_ok());
+    }
+
+    #[test]
+    fn records_get_increasing_ids() {
+        let f = FakeSensor::new();
+        f.enroll_directly(&sid_for_uid(1000), 7, 1);
+        f.enroll_directly(&sid_for_uid(1001), 2, 2);
+        let (mut c, _) = chip(&f);
+        c.open_channel(&[]).unwrap();
+        let users = db::list_users(&mut c).unwrap();
+        let ids: Vec<(u16, u16)> = users.iter().map(|u| (u.dbid, u.fingers[0].dbid)).collect();
+        assert_eq!(ids, [(0x10, 0x11), (0x12, 0x13)]);
+    }
+
+    #[test]
+    fn flash_partition_6_reads_writes_and_erases() {
+        let f = FakeSensor::new();
+        let (mut c, _) = chip(&f);
+        let read = |c: &mut FakeChip, part, addr, n| {
+            let r = cmd(c, &flash_cmd(0x40, part, addr, n, &[]));
+            assert_eq!(&r[..8], [&[0u8, 0][..], &n.to_le_bytes(), &[0, 0]].concat());
+            r[8..].to_vec()
+        };
+        // Writes reach partition 6 only, up to its very end.
+        let end = 0x8000 - 4;
+        assert_eq!(cmd(&mut c, &flash_cmd(0x41, 6, end, 4, &[1, 2, 3, 4])), OK);
+        assert_eq!(cmd(&mut c, &flash_cmd(0x41, 6, 0x10, 2, &[9, 8])), OK);
+        assert_eq!(cmd(&mut c, &flash_cmd(0x41, 5, 0x20, 2, &[7, 7])), OK);
+        assert_eq!(
+            cmd(&mut c, &flash_cmd(0x41, 6, end + 1, 4, &[1, 2, 3, 4])),
+            status(0x0401)
+        );
+        assert_eq!(cmd(&mut c, &flash_cmd(0x41, 6, 0, 2, &[5, 6])), OK);
+        assert_eq!(read(&mut c, 6, 0, 2), [5, 6]);
+        assert_eq!(read(&mut c, 6, 0x10, 1), [9]);
+        assert_eq!(read(&mut c, 6, end, 4), [1, 2, 3, 4]);
+        assert_eq!(read(&mut c, 6, 0x0f, 4), [0xff, 9, 8, 0xff]);
+        assert_eq!(read(&mut c, 6, 0x20, 2), [0xff, 0xff]);
+        // Other partitions, and past the end, read erased.
+        assert_eq!(read(&mut c, 5, 0x10, 2), [0xff, 0xff]);
+        assert_eq!(read(&mut c, 6, 0x8000 - 2, 4), [3, 4, 0xff, 0xff]);
+        // Erasing another partition leaves 6 alone; erasing 6 clears it.
+        assert_eq!(cmd(&mut c, &[0x3f, 5]), OK);
+        assert_eq!(read(&mut c, 6, 0x10, 2), [9, 8]);
+        assert_eq!(cmd(&mut c, &[0x3f, 6]), OK);
+        assert_eq!(read(&mut c, 6, 0x10, 2), [0xff, 0xff]);
+    }
+
+    #[test]
+    fn calibration_data() {
+        let f = FakeSensor::new();
+        let (mut c, _) = chip(&f);
+        let r = cmd(&mut c, &[0x6f]);
+        let values = &r[26..];
+        assert_eq!(values.len(), 112);
+        for (i, v) in values.iter().enumerate() {
+            assert_eq!(*v, 0x70 + (i % 9) as u8, "value {i}");
+        }
+        let frame = c.read_82().unwrap();
+        assert_eq!(frame.len(), 256 * 1024);
+        assert_eq!(&frame[..3], [0x70, 0x71, 0x72]);
+        assert_eq!(frame[31], 0x70);
+    }
+
+    #[test]
+    fn capture_stop_and_the_other_plain_commands() {
+        let f = FakeSensor::new();
+        let (mut c, _) = chip(&f);
+        // A stop ends a capture in progress, not a finished one.
+        cmd(&mut c, &[0x02, 0, 0, 0, 0]);
+        assert_eq!(c.capture, Capture::Armed);
+        assert_eq!(cmd(&mut c, &[0x04]), OK);
+        assert_eq!(c.capture, Capture::Idle);
+        c.capture = Capture::Finished(Touch::Finger(1));
+        assert_eq!(cmd(&mut c, &[0x04]), OK);
+        assert_eq!(c.capture, Capture::Finished(Touch::Finger(1)));
+        for op in [0x19, 0x1a, 0x39, 0x62] {
+            assert_eq!(cmd(&mut c, &[op]), OK, "{op:02x}");
+        }
+        assert_eq!(cmd(&mut c, &[0x99]), status(0x0401));
+    }
+
+    #[test]
+    fn storage_lookup_by_name_or_id() {
+        let f = FakeSensor::new();
+        f.enroll_directly(&sid_for_uid(1000), 7, 1);
+        let (mut c, _) = chip(&f);
+        let lookup = |c: &mut FakeChip, dbid: u16, name: &[u8]| {
+            let mut p = vec![0x4b];
+            p.extend(dbid.to_le_bytes());
+            p.extend((name.len() as u16).to_le_bytes());
+            p.extend(name);
+            u16::from_le_bytes(cmd(c, &p)[..2].try_into().unwrap())
+        };
+        assert_eq!(lookup(&mut c, 0, b"StgWindsor\0"), 0);
+        assert_eq!(lookup(&mut c, STORAGE_ID, b""), 0);
+        assert_eq!(lookup(&mut c, 0, b"Other\0"), NOT_FOUND);
+        assert_eq!(lookup(&mut c, 0, b""), NOT_FOUND);
+    }
+
+    #[test]
+    fn user_records_need_the_storage_as_parent() {
+        let f = FakeSensor::new();
+        let (mut c, _) = chip(&f);
+        let new = |c: &mut FakeChip, parent: u16, kind: u16| {
+            let identity = db::identity_to_bytes(&sid_for_uid(1000));
+            let mut p = vec![0x47];
+            for v in [parent, kind, STORAGE_ID, identity.len() as u16] {
+                p.extend(v.to_le_bytes());
+            }
+            p.extend(identity);
+            u16::from_le_bytes(cmd(c, &p)[..2].try_into().unwrap())
+        };
+        // No storage yet.
+        assert_eq!(new(&mut c, STORAGE_ID, db::TYPE_USER), 0x0401);
+        assert_eq!(new(&mut c, 0, db::TYPE_STORAGE), 0);
+        // Not under the storage.
+        assert_eq!(new(&mut c, 0x99, db::TYPE_USER), 0x0401);
+        assert_eq!(new(&mut c, STORAGE_ID, db::TYPE_USER), 0);
+        assert_eq!(f.lock().users.len(), 1);
+    }
+
+    #[test]
+    fn template_ids_name_their_finger() {
+        assert_eq!(finger_of_tid(&tid_for(42)), Some(42));
+        assert_eq!(finger_of_tid(b"OTHERTID\x2a\0\0\0"), None);
+        assert_eq!(finger_of_tid(b"FAKE-TI"), None);
+    }
+
+    #[test]
+    fn enrolment_updates_count_images_and_accepted_ones() {
+        let f = FakeSensor::new();
+        let (mut c, _) = chip(&f);
+        let update = |c: &mut FakeChip, t: Touch| {
+            // The first of the pair only acknowledges.
+            assert_eq!(c.enrollment_update(), OK);
+            c.capture = Capture::Finished(t);
+            let r = c.enrollment_update();
+            let body = &r[4..];
+            // Tag 0: the template, numbered by image.
+            let tlen = u16::from_le_bytes([body[2], body[3]]) as usize;
+            let template = String::from_utf8(body[4 + 0x34..4 + 0x34 + tlen].to_vec()).unwrap();
+            // Tag 1: accepted-image mask, then 0x14 per accepted image.
+            let h = &body[4 + 0x34 + tlen + 4 + 0x34..];
+            (
+                template,
+                u16::from_le_bytes([h[0], h[1]]),
+                u16::from_le_bytes([h[2], h[3]]),
+            )
+        };
+        assert_eq!(
+            update(&mut c, Touch::Finger(1)),
+            ("TEMPLATE-1".into(), 1, 0x14)
+        );
+        assert_eq!(
+            update(&mut c, Touch::Redundant(1)),
+            ("TEMPLATE-2".into(), 1, 0x14)
+        );
+        assert_eq!(
+            update(&mut c, Touch::Finger(1)),
+            ("TEMPLATE-3".into(), 3, 0x28)
+        );
+        assert_eq!(
+            update(&mut c, Touch::ScanError),
+            ("TEMPLATE-4".into(), 3, 0x28)
+        );
     }
 }

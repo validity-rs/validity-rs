@@ -149,6 +149,32 @@ mod tests {
             PskKeys::from_hw("Synthetic Laptop", "SN-SYNTHETIC").encryption
         );
         assert_ne!(k.encryption, none.encryption);
+        // There but unreadable (here a directory): an error, never the
+        // fallback keys.
+        let bad = dir.join("unreadable");
+        std::fs::create_dir_all(bad.join("product_name")).unwrap();
+        let e = host_keys(&bad).expect_err("an error");
+        assert!(e.starts_with("cannot read the DMI product_name ("), "{e}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Without a supported sensor, which is what the tests can count on: no
+    /// sensor found, and hotplug notifications whenever nusb has them.
+    #[test]
+    fn probe_and_hotplug_without_a_sensor() {
+        let mut hw = UsbHardware::new(Err("no keys".into()), Deadlines::DEFAULT);
+        let expected = if Path::new(SYSFS_USB).exists() {
+            usb::find_supported()
+                .map(|v| v.first().copied())
+                .map_err(|e| e.to_string())
+        } else {
+            Ok(None)
+        };
+        assert_eq!(hw.probe(), expected);
+        // Opening needs the host keys first.
+        assert!(matches!(hw.open(), Err(OpenFailure::Setup(m)) if m == "no keys"));
+        let available = nusb::watch_devices().is_ok();
+        assert_eq!(hw.watch(Box::new(|| {})), available);
     }
 
     #[test]
