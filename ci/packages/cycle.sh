@@ -13,14 +13,30 @@ export DEBIAN_FRONTEND=noninteractive
 
 distro=$1 pkg=$2
 FPRINT_SERVICE=/usr/share/dbus-1/system-services/net.reactivated.Fprint.service
-# Unreachable on purpose: the cycle never depends on Lenovo's server. The
+# During the installation Lenovo's server is unreachable on purpose
+# (download.lenovo.com -> 127.0.0.1 in /etc/hosts, whatever environment the
+# package manager gives its scripts): the cycle never depends on it, and the
 # package must install anyway and say how to finish.
-OFFLINE_URL=http://127.0.0.1:9/nz3gf07w.exe
+offline() { cp /etc/hosts /tmp/hosts.orig && echo '127.0.0.1 download.lenovo.com' >>/etc/hosts; }
+online() { cat /tmp/hosts.orig >/etc/hosts; }
 
 say() { printf '\n\033[1m-- %s\033[0m\n' "$*"; }
 fail() { printf '\033[31mFAIL: %s\033[0m\n' "$*"; exit 1; }
 # expect <pattern> <command...>: runs it, shows its output, fails unless the
 # pattern (extended regex) matches.
+# eventually <pattern> <command...>: like expect, retried for up to 10 s.
+# Right after it starts, the daemon lists the device while it probes for it,
+# so a client asking then gets an error before the settled answer.
+eventually() {
+    local pat=$1 out i; shift
+    for i in $(seq 1 20); do
+        out=$("$@" 2>&1) || true
+        printf '%s\n' "$out" | grep -qE "$pat" && break
+        sleep 0.5
+    done
+    printf '%s\n' "$out" | sed 's/^/    /'
+    printf '%s\n' "$out" | grep -qE "$pat" || fail "expected /$pat/ within 10 s from: $*"
+}
 expect() {
     local pat=$1 out; shift
     out=$("$@" 2>&1) || true
@@ -56,10 +72,10 @@ owner_cmdline() {
 # What the cycle compares before and after: every path outside the volatile
 # places with its type and mode, and the content hash of every regular file.
 SKIP=(/proc /sys /dev /run /tmp /var/tmp /var/log /var/cache /var/lib/apt /var/lib/dnf
-    /var/lib/rpm /usr/lib/sysimage/rpm /var/lib/pacman /lib/apk/db /etc/apk/world
+    /var/lib/rpm /usr/lib/sysimage/rpm /usr/lib/sysimage/libdnf5 /var/lib/pacman /lib/apk/db /etc/apk/world
     /var/lib/systemd /var/lib/dpkg/status /var/lib/dpkg/status-old /var/lib/dpkg/available
     /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/lib/dpkg/triggers
-    /var/lib/dpkg/diversions-old /etc/ld.so.cache /ci /out /root/.cache /var/lib/fprint)
+    /var/lib/dpkg/diversions-old /etc/hosts /etc/ld.so.cache /ci /out /root/.cache /var/lib/fprint)
 snapshot() {
     local prune=() p
     for p in "${SKIP[@]}"; do prune+=(-path "$p" -o); done
@@ -73,21 +89,21 @@ snapshot() {
 # Distro specifics: install, remove, the package's file list, the init system.
 case "$distro" in
     debian)
-        install_pkg() { VALIDITY_VENDOR_URL=$OFFLINE_URL apt-get install -y --no-install-recommends "$pkg"; }
+        install_pkg() { apt-get install -y --no-install-recommends "$pkg"; }
         remove_pkg() { apt-get purge -y validity-daemon; }
         pkg_files() { dpkg -L validity-daemon; }
         installed() { dpkg-query -W -f '${Status}' validity-daemon 2>/dev/null | grep -q 'install ok installed'; }
         init=systemd daemon=/usr/libexec/validity-daemon
         ;;
     fedora)
-        install_pkg() { VALIDITY_VENDOR_URL=$OFFLINE_URL dnf install -y --setopt=install_weak_deps=False "$pkg"; }
+        install_pkg() { dnf install -y --setopt=install_weak_deps=False "$pkg"; }
         remove_pkg() { dnf remove -y validity-daemon; }
         pkg_files() { rpm -ql validity-daemon; }
         installed() { rpm -q validity-daemon; }
         init=systemd daemon=/usr/libexec/validity-daemon
         ;;
     archlinux)
-        install_pkg() { VALIDITY_VENDOR_URL=$OFFLINE_URL pacman -U --noconfirm "$pkg"; }
+        install_pkg() { pacman -U --noconfirm "$pkg"; }
         remove_pkg() { pacman -Rns --noconfirm validity-daemon; }
         pkg_files() { pacman -Qlq validity-daemon; }
         installed() { pacman -Q validity-daemon; }
@@ -97,7 +113,7 @@ case "$distro" in
         # abuild splits the OpenRC script and the documentation into
         # subpackages, built beside the main one.
         subpkgs() { local d; d=$(dirname "$pkg"); ls "$d"/validity-daemon-openrc-*.apk "$d"/validity-daemon-doc-*.apk; }
-        install_pkg() { VALIDITY_VENDOR_URL=$OFFLINE_URL apk add --no-network --allow-untrusted "$pkg" $(subpkgs); }
+        install_pkg() { apk add --no-network --allow-untrusted "$pkg" $(subpkgs); }
         remove_pkg() { apk del validity-daemon validity-daemon-openrc validity-daemon-doc; }
         pkg_files() { apk info -L validity-daemon | sed -n 's|^\([^ ]\)|/\1|p' | grep -v ' contains:'; }
         installed() { apk info -e validity-daemon; }
@@ -124,8 +140,10 @@ expect "$FPRINTD_EXEC" cat "$FPRINT_SERVICE"
 before=$(mktemp)
 snapshot >"$before"
 
-say "install $(basename "$pkg") (vendor download unreachable on purpose)"
-expect "validity-vendor: cannot reach.*offline|password login is" install_pkg
+say "install $(basename "$pkg") (Lenovo's server unreachable on purpose)"
+offline
+expect "validity-vendor: cannot reach https://download.lenovo.com/.*offline" install_pkg
+online
 installed || fail "not installed"
 
 say "installed files"
@@ -140,7 +158,7 @@ expect "not installed" validity-vendor check
 if [ "$init" = systemd ]; then
     test -f /usr/lib/systemd/system/validity-daemon.service || fail "unit missing"
     test -f /usr/lib/udev/rules.d/60-validity-daemon.rules || fail "udev rule missing"
-    systemd-analyze verify validity-daemon.service || fail "unit does not verify"
+    systemd-analyze verify --man=no validity-daemon.service || fail "unit does not verify"
 else
     test -x /etc/init.d/validity-daemon || fail "OpenRC script missing"
 fi
@@ -156,7 +174,7 @@ case "$distro" in
         # fprintd's file is untouched; its unit hands over to ours.
         expect "$FPRINTD_EXEC" cat "$FPRINT_SERVICE"
         expect 'validity-daemon.service' systemctl show -p Requires --value fprintd.service
-        systemd-analyze verify fprintd.service || fail "fprintd.service with the drop-in does not verify"
+        systemd-analyze verify --man=no fprintd.service || fail "fprintd.service with the drop-in does not verify"
         ;;
     alpine)
         # No systemd: fprintd's file is untouched and validity-daemon runs as an
@@ -169,10 +187,15 @@ say "smoke test: the daemon on the emulated sensor, fprintd's client in front"
 if [ "$init" = systemd ]; then
     systemctl stop validity-daemon.service fprintd.service 2>/dev/null || true
 fi
-"$daemon" --fake-sensor --state-dir /tmp/validity-fake \
-    --config /usr/share/doc/validity-daemon/validity.toml.example >/tmp/fake.log 2>&1 &
+# With the shipped example configuration, which must parse; the Fedora and
+# Arch images install no documentation (nodocs, NoExtract), so not there.
+example=/usr/share/doc/validity-daemon/validity.toml.example
+config=()
+if [ -f "$example" ]; then config=(--config "$example"); else echo "    (no $example: this image installs no documentation)"; fi
+"$daemon" --fake-sensor --state-dir /tmp/validity-fake "${config[@]}" >/tmp/fake.log 2>&1 &
 fake=$!
-wait_for has_owner net.reactivated.Fprint
+for _ in $(seq 1 150); do has_owner net.reactivated.Fprint && break; sleep 0.2; done
+has_owner net.reactivated.Fprint || { sed 's/^/    daemon: /' /tmp/fake.log; fail "the daemon on the emulated sensor did not take the bus name"; }
 expect "^$daemon --fake-sensor" owner_cmdline net.reactivated.Fprint
 expect 'no fingers enrolled' fprintd-list root
 kill "$fake"
@@ -182,7 +205,7 @@ sed 's/^/    daemon: /' /tmp/fake.log | tail -5
 
 if [ "$init" = systemd ]; then
     say "D-Bus activation starts validity-daemon (no sensor here: no device)"
-    expect 'No devices available' fprintd-list root
+    eventually 'No devices available' fprintd-list root
     wait_for has_owner net.reactivated.Fprint
     expect "^$daemon" owner_cmdline net.reactivated.Fprint
     expect '^active$' systemctl is-active validity-daemon.service
@@ -193,7 +216,7 @@ else
     rc-service validity-daemon start
     wait_for has_owner net.reactivated.Fprint
     expect "^$daemon" owner_cmdline net.reactivated.Fprint
-    expect 'No devices available' fprintd-list root
+    eventually 'No devices available' fprintd-list root
     # Left running: removing the package must stop it.
 fi
 
@@ -227,7 +250,7 @@ fi
 echo "    identical: $(wc -l <"$before") entries"
 
 say "fprintd answers again"
-expect 'No devices available' fprintd-list root
+eventually 'No devices available' fprintd-list root
 wait_for has_owner net.reactivated.Fprint
 expect 'fprintd' owner_cmdline net.reactivated.Fprint
 

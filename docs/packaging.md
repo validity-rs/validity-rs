@@ -119,8 +119,9 @@ directory a package may use comes before fprintd's.
 (`test` stage: fprintd, polkitd, curl and the system bus preinstalled):
 
 1. snapshot every file (type, mode, SHA-256) outside volatile places;
-2. `apt install ./validity-daemon_*.deb`, with the vendor download pointed at
-   an unreachable address: the install must succeed and explain;
+2. `apt install ./validity-daemon_*.deb` with `download.lenovo.com` resolving
+   to 127.0.0.1 (`/etc/hosts`, so it holds whatever environment the package
+   manager gives its scripts): the install must succeed and say it is offline;
 3. check the files, the diversion and the unit (`systemd-analyze verify`);
 4. start `/usr/libexec/validity-daemon --fake-sensor` and run `fprintd-list`
    against it (`no fingers enrolled`);
@@ -218,8 +219,12 @@ an OpenRC service that must own `net.reactivated.Fprint` before any client asks:
 starts after `dbus` and before the display managers). If it is not running, a
 client activates fprintd, which finds no supported sensor, and PAM falls back
 to the password. `fprintd-pam` does not depend on `fprintd` on Alpine, but
-fprintd's tools and polkit actions do, hence the dependency. The cycle starts
-OpenRC's `dbus` service in a plain container, checks that the OpenRC service
+fprintd's tools and polkit actions do, hence the dependency. The service is
+stopped on removal by the `-openrc` subpackage's pre-deinstall script, which
+apk runs while the OpenRC script still exists. The cycle starts
+OpenRC's `dbus` service in a plain container (`tini` as PID 1, which reaps
+`supervise-daemon`'s orphans as init does; under a non-reaping PID 1 the stop
+would wait forever on a zombie), checks that the OpenRC service
 owns the name and answers `fprintd-list`, and that removal gives fprintd's
 activation back. No udev rule is shipped (it only starts a systemd unit).
 

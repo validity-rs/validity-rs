@@ -17,7 +17,7 @@ mkdir -p "$work"
 tar -xzf "$tarball" -C "$work" --strip-components=3 \
     "$name/packaging/alpine/APKBUILD" "$name/packaging/alpine/validity-daemon.initd" \
     "$name/packaging/alpine/validity-daemon.post-install" "$name/packaging/alpine/validity-daemon.post-upgrade" \
-    "$name/packaging/alpine/validity-daemon.pre-deinstall" "$name/packaging/alpine/validity-daemon.post-deinstall"
+    "$name/packaging/alpine/validity-daemon-openrc.pre-deinstall" "$name/packaging/alpine/validity-daemon.post-deinstall"
 grep -qE "^pkgver=$version\$" "$work/APKBUILD" || {
     echo "the APKBUILD's pkgver is not $version (Cargo.toml)" >&2
     exit 1

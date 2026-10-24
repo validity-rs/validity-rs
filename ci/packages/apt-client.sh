@@ -19,6 +19,19 @@ export VALIDITY_VENDOR_URL=http://127.0.0.1:9/nz3gf07w.exe
 
 say() { printf '\n\033[1m-- %s\033[0m\n' "$*"; }
 fail() { printf '\033[31mFAIL: %s\033[0m\n' "$*"; exit 1; }
+# eventually <pattern> <command...>: like expect, retried for up to 10 s.
+# Right after it starts, the daemon lists the device while it probes for it,
+# so a client asking then gets an error before the settled answer.
+eventually() {
+    local pat=$1 out i; shift
+    for i in $(seq 1 20); do
+        out=$("$@" 2>&1) || true
+        printf '%s\n' "$out" | grep -qE "$pat" && break
+        sleep 0.5
+    done
+    printf '%s\n' "$out" | sed 's/^/    /'
+    printf '%s\n' "$out" | grep -qE "$pat" || fail "expected /$pat/ within 10 s from: $*"
+}
 expect() {
     local pat=$1 out; shift
     out=$("$@" 2>&1) || true
@@ -78,7 +91,7 @@ phase_install() {
     else
         echo "    NOTICE: no fingerprint-settings package in this repository (its .deb was not built here); skipped"
     fi
-    expect 'No devices available' fprintd-list root
+    eventually 'No devices available' fprintd-list root
     expect '^active$' systemctl is-active validity-daemon.service
     main_pid >/tmp/pid.before
 
@@ -107,7 +120,7 @@ phase_upgrade() {
     say "the running daemon was restarted on the new version"
     expect '^active$' systemctl is-active validity-daemon.service
     [ "$(main_pid)" != "$(cat /tmp/pid.before)" ] || fail "the daemon was not restarted"
-    expect 'No devices available' fprintd-list root
+    eventually 'No devices available' fprintd-list root
     say "apt: OK"
 }
 

@@ -13,9 +13,10 @@ pkgdesc="fprintd-compatible service for Synaptics/Validity match-on-chip fingerp
 url="https://github.com/validity-rs/validity-rs"
 arch="x86_64 aarch64"
 license="MIT AND Apache-2.0 AND BSD-3-Clause"
-depends="fprintd dbus polkit curl ca-certificates"
+# curl brings the CA bundle (ca-certificates-bundle).
+depends="fprintd dbus polkit curl"
 makedepends="cargo"
-install="$pkgname.post-install $pkgname.post-upgrade $pkgname.pre-deinstall $pkgname.post-deinstall"
+install="$pkgname.post-install $pkgname.post-upgrade $pkgname.post-deinstall $pkgname-openrc.pre-deinstall"
 subpackages="$pkgname-doc $pkgname-openrc"
 source="https://github.com/validity-rs/validity-rs/releases/download/v$pkgver/validity-rs-$pkgver.tar.gz
 	validity-daemon.initd

@@ -40,6 +40,11 @@ RUN apk add --no-cache \
         fprintd \
         openrc \
         polkit \
-    && apk info -e fprintd polkit dbus openrc curl
+        tini \
+    && apk info -e fprintd polkit dbus openrc curl tini
 
+# A PID 1 that reaps orphans, as init does on a real system: supervise-daemon
+# double-forks, and `rc-service validity-daemon stop` waits until its
+# supervisor is gone, which a zombie never is under `sleep` as PID 1.
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["sleep", "infinity"]

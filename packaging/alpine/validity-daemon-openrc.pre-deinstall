@@ -1,0 +1,5 @@
+#!/bin/sh
+# The OpenRC script goes with this subpackage, which apk removes before the
+# daemon itself: the service is stopped here, while its script still exists.
+rc-service --ifstarted validity-daemon stop >/dev/null 2>&1 || true
+exit 0

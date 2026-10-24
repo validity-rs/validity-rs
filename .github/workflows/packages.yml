@@ -11,9 +11,11 @@ on:
     - cron: "37 4 * * 1"
   workflow_dispatch:
 
+# The cycles take about 20 minutes: a newer push queues behind the run in
+# flight instead of cancelling it (GitHub keeps one pending run per group).
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
