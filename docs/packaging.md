@@ -376,7 +376,10 @@ published.
    prerelease goes out unsigned with a warning; a release fails.
 4. **Provenance**: `actions/attest-build-provenance` v4.2.2 (pinned by commit)
    attests every file, and each attestation is verified at once with
-   `gh attestation verify`.
+   `gh attestation verify`. GitHub only offers attestations to public
+   repositories on the Free plan: while `validity-rs/validity-rs` is private,
+   a tag fails at this step, so the first release is tagged after the
+   repository is made public.
 5. **A draft GitHub release** with all files. A maintainer reviews it and
    publishes it.
 6. Publication jobs, each off until its repository variable is `1`:

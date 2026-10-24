@@ -1,0 +1,417 @@
+name: Release
+
+# On a version tag (v<Cargo.toml version>, or v<version>-<pre> for a
+# prerelease), once CI and Packages are green on the tagged commit: every
+# package built from one vendored source tarball in its pinned distro image
+# and run through its install cycle again, the .deb rebuilt and compared,
+# SHA256SUMS written and signed, a provenance attestation for every file, and
+# a draft GitHub release with all of it. crates.io, the APT repository, COPR
+# and the AUR each have a job that stays off until its repository variable is
+# set (docs/packaging.md, "Releases").
+#
+# workflow_dispatch is a dry run: everything is built and checked, nothing is
+# signed, attested or published.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: "10"
+
+jobs:
+  check:
+    name: Tag, version and green CI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # the CI and Packages runs of this commit
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: check
+        name: The tag names Cargo.toml's version; CI and Packages are green on this commit
+        run: ci/packages/release-check.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+
+  source:
+    name: Vendored source tarball
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the tarball
+        run: ci/packages/run.sh source
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: source
+          path: target/packages/validity-rs-*.tar.gz
+          if-no-files-found: error
+
+  package:
+    name: Package (${{ matrix.job }})
+    needs: source
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        job: [debian, fedora, archlinux, alpine, repro, keyring]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: source
+          path: target/packages
+      - name: Build, install, smoke-test, remove
+        run: ci/packages/run.sh "$JOB"
+        env:
+          JOB: ${{ matrix.job }}
+          KEEP_SOURCE: "1"
+      # What is released: the packages themselves (not the debug or repro
+      # copies), plus the AUR's PKGBUILD and the aports APKBUILD.
+      - name: Collect
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          case "$JOB" in
+            debian) cp target/packages/debian/*.deb dist/ ;;
+            fedora) cp target/packages/fedora/*.rpm dist/ ;;
+            archlinux)
+              cp target/packages/archlinux/validity-daemon-[0-9]*.pkg.tar.zst dist/
+              mkdir -p dist/aur && cp target/packages/archlinux/{PKGBUILD,.SRCINFO,validity-daemon.install} dist/aur/ ;;
+            alpine)
+              cp target/packages/alpine/*.apk dist/
+              mkdir -p dist/aports && cp target/packages/alpine/APKBUILD dist/aports/ ;;
+            keyring) cp target/packages/keyring/*.deb dist/ ;;
+            repro) ;;
+          esac
+          ls -lR dist
+        env:
+          JOB: ${{ matrix.job }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ matrix.job }}
+          path: dist
+          include-hidden-files: true
+          if-no-files-found: ignore
+
+  collect:
+    name: Files and SHA256SUMS
+    needs: [check, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+      - name: One flat directory, then its checksums
+        run: |
+          set -euo pipefail
+          mkdir dist
+          cp artifacts/source/*.tar.gz dist/
+          for d in artifacts/dist-*; do
+            find "$d" -maxdepth 1 -type f -exec cp {} dist/ \;
+          done
+          # The AUR and aports build files, as one archive each side of the packages.
+          tar -C artifacts/dist-archlinux/aur --sort=name --owner=0 --group=0 --numeric-owner \
+            -czf "dist/validity-daemon-$VERSION-aur.tar.gz" .
+          cp artifacts/dist-alpine/aports/APKBUILD "dist/validity-daemon-$VERSION-APKBUILD"
+          (cd dist && sha256sum -- * | LC_ALL=C sort -k2 >SHA256SUMS)
+          cat dist/SHA256SUMS
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: dist
+          if-no-files-found: error
+
+  sign:
+    # The signing subkey lives in the "apt" environment, which only tags can
+    # use (docs/packaging.md). Without it a prerelease goes out unsigned, with
+    # a warning; a release fails.
+    name: Sign SHA256SUMS
+    if: github.ref_type == 'tag'
+    needs: [check, collect]
+    runs-on: ubuntu-latest
+    environment: apt
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: dist
+      - name: Detached signature by the archive signing subkey
+        run: |
+          set -euo pipefail
+          if [ -z "$APT_SIGNING_KEY" ]; then
+            if [ "$PRERELEASE" = true ]; then
+              echo "::warning::APT_SIGNING_KEY is not set: this prerelease's SHA256SUMS is not signed"
+              mkdir -p signature
+              exit 0
+            fi
+            echo "::error::APT_SIGNING_KEY is not set: a release must have a signed SHA256SUMS"
+            exit 1
+          fi
+          export GNUPGHOME
+          GNUPGHOME=$(mktemp -d)
+          printf '%s\n' "$APT_SIGNING_KEY" | gpg --batch --quiet --import
+          sub=$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "ssb" && $12 ~ /s/ { s = 1; next } s && $1 == "fpr" { print $10; exit }')
+          mkdir -p signature
+          gpg --batch --local-user "$sub!" --armor --detach-sign --output signature/SHA256SUMS.asc dist/SHA256SUMS
+          gpgconf --kill gpg-agent
+          rm -rf "$GNUPGHOME"
+          # It must verify against the key users have.
+          gpgv --keyring packaging/apt/validity-rs-archive-keyring.gpg signature/SHA256SUMS.asc dist/SHA256SUMS
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+          PRERELEASE: ${{ needs.check.outputs.prerelease }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signature
+          path: signature
+          if-no-files-found: ignore
+
+  publish:
+    name: Attest and draft the GitHub release
+    if: github.ref_type == 'tag'
+    needs: [check, collect, sign]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the draft release and its files
+      id-token: write # Sigstore signing of the attestations
+      attestations: write # storing the attestations
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: signature
+          path: dist
+        continue-on-error: true
+      - name: Provenance attestations (SLSA) for every file
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+      - name: Verify every attestation
+        run: |
+          set -euo pipefail
+          for f in dist/*; do
+            gh attestation verify "$f" --repo "$REPO" --signer-workflow "$REPO/.github/workflows/release.yml" >/dev/null
+            echo "attested: $(basename "$f")"
+          done
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+      - name: Draft release
+        run: |
+          set -euo pipefail
+          notes=$(mktemp)
+          {
+            echo "validity-rs $VERSION."
+            echo
+            echo "Every file has a GitHub provenance attestation:"
+            echo "\`gh attestation verify <file> --repo $REPO\`."
+            echo "SHA256SUMS is signed by the archive signing key"
+            echo "(59CB F35F 3147 A424 BE25  DF07 8F4B 8482 B486 C8FD) when SHA256SUMS.asc is present:"
+            echo "\`gpgv --keyring validity-rs-archive-keyring.gpg SHA256SUMS.asc SHA256SUMS\`."
+          } >"$notes"
+          flags=(--draft --verify-tag --title "validity-rs $VERSION" --notes-file "$notes")
+          [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+          gh release create "$TAG" "${flags[@]}" --repo "$REPO" dist/*
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.check.outputs.version }}
+          PRERELEASE: ${{ needs.check.outputs.prerelease }}
+
+  crates-io:
+    # Off until vars.CRATES_IO_PUBLISH is "1". Trusted Publishing (OIDC, no
+    # stored token) cannot create a crate: each crate's first version is
+    # published by hand, then its Trusted Publisher is set to this workflow and
+    # the "crates-io" environment (docs/packaging.md).
+    name: Publish to crates.io
+    if: github.ref_type == 'tag' && needs.check.outputs.prerelease == 'false' && vars.CRATES_IO_PUBLISH == '1'
+    needs: [check, publish]
+    runs-on: ubuntu-latest
+    environment: crates-io
+    container:
+      # Dockerfile.debian's base: the pinned Rust 1.99.1 trixie image.
+      image: rust:1.99.1-trixie@sha256:931c2c0531a8b143e044f0f3914dfe802f15bb3d1955f0b657e9359327ac2ffc
+    permissions:
+      contents: read
+      id-token: write # Trusted Publishing: the OIDC token crates.io exchanges
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: auth
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+      - name: Publish in dependency order
+        run: ci/packages/publish-crates.sh
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  apt:
+    # Off until vars.APT_PUBLISH is "1". Rebuilds the repository tree from this
+    # release's .deb files (and fingerprint-settings' latest release, if any),
+    # signs it, and commits it to the gh-pages branch of validity-rs/apt with
+    # that repository's deploy key (secret APT_DEPLOY_KEY, write access to that
+    # repository only), in the "apt" environment.
+    name: Publish the APT repository
+    if: github.ref_type == 'tag' && vars.APT_PUBLISH == '1'
+    needs: [check, publish]
+    runs-on: ubuntu-latest
+    environment: apt
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: dist
+      - name: The packages of the repository
+        run: |
+          set -euo pipefail
+          mkdir -p target/packages/apt-debs
+          cp dist/*.deb target/packages/apt-debs/
+          # fingerprint-settings is released from its own repository.
+          gh release download --repo validity-rs/fingerprint-settings --pattern '*_amd64.deb' \
+            --dir target/packages/apt-debs 2>/dev/null \
+            || echo "::notice::no fingerprint-settings release: the repository carries validity-rs only"
+          ls -l target/packages/apt-debs
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Signed tree
+        run: ci/packages/run.sh apttree
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+      - name: Commit it to validity-rs/apt (gh-pages)
+        run: |
+          set -euo pipefail
+          key=$(mktemp)
+          printf '%s\n' "$APT_DEPLOY_KEY" >"$key"
+          # github.com's host key, as published by GitHub's meta API (api.github.com/meta).
+          hosts=$(mktemp)
+          cat >"$hosts" <<'KEYS'
+          github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+          KEYS
+          sed -i 's/^ *//' "$hosts"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$hosts -o StrictHostKeyChecking=yes"
+          git clone --branch gh-pages --depth 1 git@github.com:validity-rs/apt.git pages
+          find pages -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -a target/packages/apt-tree/. pages/
+          cd pages
+          git add -A
+          if git diff --cached --quiet; then
+            echo "the repository is already up to date"
+          else
+            git -c user.name="validity-rs release" -c user.email="409744+pierre-warnier@users.noreply.github.com" \
+              commit -q -m "validity-rs $VERSION"
+            git push origin gh-pages
+          fi
+          rm -f "$key"
+        env:
+          APT_DEPLOY_KEY: ${{ secrets.APT_DEPLOY_KEY }}
+          VERSION: ${{ needs.check.outputs.version }}
+
+  copr:
+    # Off until vars.COPR_PUBLISH is "1": builds this release's source RPM in
+    # the COPR project validity-rs/validity-daemon (secret COPR_CONFIG: the
+    # copr-cli configuration of an account with build rights there).
+    name: Build in COPR
+    if: github.ref_type == 'tag' && vars.COPR_PUBLISH == '1'
+    needs: [check, publish]
+    runs-on: ubuntu-latest
+    environment: copr
+    container:
+      image: fedora:latest@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: dist
+      - name: copr-cli build
+        run: |
+          set -euo pipefail
+          dnf install -y copr-cli
+          mkdir -p ~/.config
+          printf '%s\n' "$COPR_CONFIG" >~/.config/copr
+          copr-cli build validity-rs/validity-daemon dist/validity-daemon-*.src.rpm
+        env:
+          COPR_CONFIG: ${{ secrets.COPR_CONFIG }}
+
+  aur:
+    # Off until vars.AUR_PUBLISH is "1": pushes the PKGBUILD (pinned to this
+    # release's tarball) and .SRCINFO to the AUR package validity-daemon
+    # (secret AUR_SSH_KEY: the AUR account's SSH key).
+    name: Publish to the AUR
+    if: github.ref_type == 'tag' && needs.check.outputs.prerelease == 'false' && vars.AUR_PUBLISH == '1'
+    needs: [check, publish]
+    runs-on: ubuntu-latest
+    environment: aur
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist-archlinux
+          path: dist
+      - name: Push to aur.archlinux.org
+        run: |
+          set -euo pipefail
+          key=$(mktemp)
+          printf '%s\n' "$AUR_SSH_KEY" >"$key"
+          # aur.archlinux.org's host key; its fingerprint
+          # SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4 is published on aur.archlinux.org.
+          hosts=$(mktemp)
+          echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" >"$hosts"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$hosts -o StrictHostKeyChecking=yes"
+          git clone ssh://aur@aur.archlinux.org/validity-daemon.git aur
+          cp dist/aur/PKGBUILD dist/aur/.SRCINFO dist/aur/validity-daemon.install aur/
+          cd aur
+          git add PKGBUILD .SRCINFO validity-daemon.install
+          git -c user.name="validity-rs release" -c user.email="409744+pierre-warnier@users.noreply.github.com" \
+            commit -q -m "validity-daemon $VERSION"
+          git push origin master
+          rm -f "$key"
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+          VERSION: ${{ needs.check.outputs.version }}
