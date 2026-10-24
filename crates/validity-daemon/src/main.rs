@@ -8,10 +8,9 @@ use validity_daemon::fake::{self, FakeSensor};
 use validity_daemon::logging;
 use validity_daemon::polkit::Polkit;
 use validity_daemon::sensor::Hardware;
-use validity_daemon::service::{self, Deps, Options, Setup};
+use validity_daemon::service::{self, Deps, Setup};
 use validity_daemon::usb::{UsbHardware, host_keys, load_blobs};
 use validity_daemon::users::{SidMap, SystemUsers};
-use validity_proto::session::Deadlines;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -51,10 +50,7 @@ fn main() -> ExitCode {
     }
     let hw = UsbHardware::new(
         host_keys(std::path::Path::new("/sys/class/dmi/id")),
-        Deadlines {
-            finger: config.finger_timeout,
-            ..Deadlines::DEFAULT
-        },
+        config.deadlines(),
     );
     let setup = Setup {
         blobs,
@@ -70,16 +66,12 @@ fn serve<H: Hardware>(config: &Config, hw: H, setup: Setup) -> ExitCode {
         users: Arc::new(SystemUsers),
         sids: SidMap::new(config.sid_overrides.clone()),
     };
-    let opts = Options {
-        ready_timeout: config.ready_timeout,
-        ..Options::default()
-    };
     match zbus::block_on(service::run(
         config.bus.clone(),
         hw,
         setup,
         deps,
-        opts,
+        config.options(),
         service::termination(),
     )) {
         Ok(()) => ExitCode::SUCCESS,

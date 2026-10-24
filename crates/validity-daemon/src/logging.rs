@@ -82,4 +82,38 @@ mod tests {
         assert_eq!(priority(Level::Debug), 7);
         assert_eq!(priority(Level::Info), 6);
     }
+
+    #[test]
+    fn levels_and_targets() {
+        let enabled = |max: LevelFilter, level: Level, target: &str| {
+            Logger {
+                level: max,
+                journal: false,
+            }
+            .enabled(&Metadata::builder().level(level).target(target).build())
+        };
+        // Up to the configured level, for the daemon and the protocol.
+        assert!(enabled(
+            LevelFilter::Info,
+            Level::Info,
+            "validity_daemon::worker"
+        ));
+        assert!(enabled(LevelFilter::Info, Level::Warn, "validity_proto"));
+        assert!(!enabled(LevelFilter::Info, Level::Debug, "validity_daemon"));
+        assert!(enabled(
+            LevelFilter::Trace,
+            Level::Trace,
+            "validity_proto::session"
+        ));
+        assert!(!enabled(LevelFilter::Warn, Level::Info, "validity_proto"));
+        // Other crates: at most info, and never above the configured level.
+        assert!(enabled(LevelFilter::Trace, Level::Info, "zbus::connection"));
+        assert!(!enabled(
+            LevelFilter::Trace,
+            Level::Debug,
+            "zbus::connection"
+        ));
+        assert!(!enabled(LevelFilter::Warn, Level::Info, "zbus"));
+        assert!(enabled(LevelFilter::Warn, Level::Error, "zbus"));
+    }
 }

@@ -79,6 +79,23 @@ impl Config {
     pub fn calibration_path(&self) -> PathBuf {
         self.state_dir.join(CALIBRATION_FILE)
     }
+
+    /// The deadlines of the sensor sessions: the fixed ones, with the
+    /// configured finger wait.
+    pub fn deadlines(&self) -> Deadlines {
+        Deadlines {
+            finger: self.finger_timeout,
+            ..Deadlines::DEFAULT
+        }
+    }
+
+    /// The D-Bus side's delays: the defaults, with the configured ready wait.
+    pub fn options(&self) -> crate::service::Options {
+        crate::service::Options {
+            ready_timeout: self.ready_timeout,
+            ..crate::service::Options::default()
+        }
+    }
 }
 
 /// What the command line asked for.
@@ -129,6 +146,12 @@ fn parse_file(text: &str, path: &Path) -> Result<File, String> {
 /// Parses the command line (without the program name), reading the
 /// configuration file it names (or the default one, if present).
 pub fn parse(args: &[String]) -> Result<Cli, String> {
+    parse_with_default(args, Path::new(DEFAULT_CONFIG))
+}
+
+/// [`parse`], with `default_config` read when the command line names no file:
+/// a missing one means the defaults, an unreadable one is an error.
+fn parse_with_default(args: &[String], default_config: &Path) -> Result<Cli, String> {
     let mut config_path: Option<PathBuf> = None;
     let mut dll = None;
     let mut state = None;
@@ -164,7 +187,7 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
             p,
         )?,
         None => {
-            let p = Path::new(DEFAULT_CONFIG);
+            let p = default_config;
             match std::fs::read_to_string(p) {
                 Ok(t) => parse_file(&t, p)?,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => File::default(),
@@ -250,6 +273,21 @@ alice = "S-1-5-21-7-8-9-500"
         assert_eq!(c.finger_timeout, Duration::from_secs(12));
         assert_eq!(c.sid_overrides["alice"].to_string(), "S-1-5-21-7-8-9-500");
         assert_eq!(c.bus, Bus::System);
+        // What the daemon is started with.
+        assert_eq!(
+            c.deadlines(),
+            Deadlines {
+                finger: Duration::from_secs(12),
+                ..Deadlines::DEFAULT
+            }
+        );
+        let o = c.options();
+        let d = crate::service::Options::default();
+        assert_eq!(o.ready_timeout, Duration::from_millis(1500));
+        assert_eq!(
+            (o.stop_timeout, o.delete_timeout, o.sleep_timeout),
+            (d.stop_timeout, d.delete_timeout, d.sleep_timeout)
+        );
 
         let Cli::Run(c) = parse(&args(&[
             "--config",
@@ -280,6 +318,28 @@ alice = "S-1-5-21-7-8-9-500"
             panic!()
         };
         assert_eq!(c.log_level, LevelFilter::Trace);
+    }
+
+    #[test]
+    fn default_configuration_file() {
+        let dir = std::env::temp_dir().join(format!("validity-config-{}-dir", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Missing: the defaults.
+        let Cli::Run(c) = parse_with_default(&[], &dir.join("absent.toml")).unwrap() else {
+            panic!()
+        };
+        assert_eq!(c.state_dir, Path::new(DEFAULT_STATE_DIR));
+        // Present: read.
+        let f = dir.join("validity.toml");
+        std::fs::write(&f, "state_dir = \"/srv/v\"\n").unwrap();
+        let Cli::Run(c) = parse_with_default(&[], &f).unwrap() else {
+            panic!()
+        };
+        assert_eq!(c.state_dir, Path::new("/srv/v"));
+        // There but unreadable (here a directory): an error, not the defaults.
+        let e = parse_with_default(&[], &dir).unwrap_err();
+        assert!(e.starts_with(&format!("{}: ", dir.display())), "{e}");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -935,6 +935,122 @@ mod tests {
         assert_eq!(m.vanished(":1.3"), Some(None));
     }
 
+    fn busy_message<T: std::fmt::Debug>(r: Result<T, FprintError>) -> String {
+        match r {
+            Err(FprintError::AlreadyInUse(m)) => m,
+            other => panic!("expected AlreadyInUse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn state_labels() {
+        for (s, l) in [
+            (DeviceState::Opening, "opening"),
+            (DeviceState::Ready, "ready"),
+            (DeviceState::Absent, "absent"),
+            (DeviceState::NeedsSetup("x".into()), "needs-setup"),
+            (DeviceState::Failed("x".into()), "failed"),
+            (DeviceState::Suspended, "suspended"),
+        ] {
+            assert_eq!(s.label(), l);
+        }
+    }
+
+    #[test]
+    fn busy_messages_name_the_running_action() {
+        let mut m = ready(vec![(1000, vec![7, 8])]);
+        m.claim(":1.1", alice().0, alice().1).unwrap();
+        let v = m.start_verify(":1.1", "any").unwrap();
+        assert_eq!(
+            busy_message(m.start_enroll(":1.1", "right-thumb")),
+            "Verification already in progress"
+        );
+        m.stop(":1.1", ActionKind::Verify).unwrap();
+        assert_eq!(
+            busy_message(m.start_verify(":1.1", "any")),
+            "Another operation is already in progress"
+        );
+        m.on_event(Event::OpEnded { op: v.op });
+        let e = m.start_enroll(":1.1", "right-thumb").unwrap();
+        assert_eq!(
+            busy_message(m.start_verify(":1.1", "any")),
+            "Enrollment already in progress"
+        );
+        m.on_event(Event::OpEnded { op: e.op });
+        m.stop(":1.1", ActionKind::Enroll).unwrap();
+        let (_, d) = m.start_delete(":1.1", Some(7)).unwrap();
+        assert_eq!(
+            busy_message(m.start_verify(":1.1", "any")),
+            "Delete already in progress"
+        );
+        m.finish_delete(d);
+    }
+
+    #[test]
+    fn stop_must_match_the_finished_action() {
+        let mut m = ready(vec![(1000, vec![7])]);
+        m.claim(":1.1", alice().0, alice().1).unwrap();
+        let v = m.start_verify(":1.1", "any").unwrap();
+        m.on_event(Event::Status {
+            op: v.op,
+            kind: ActionKind::Verify,
+            result: "verify-match",
+            done: true,
+        });
+        // A finished verification is not ended by EnrollStop.
+        assert_eq!(
+            err_name(m.stop(":1.1", ActionKind::Enroll)),
+            "net.reactivated.Fprint.Error.AlreadyInUse"
+        );
+        assert_eq!(m.stop(":1.1", ActionKind::Verify).unwrap(), Stop::Done);
+    }
+
+    #[test]
+    fn release_cancels_verify_and_enroll_runs_but_not_deletes() {
+        let mut m = ready(vec![(1000, vec![7])]);
+        let (u, s) = alice();
+        // A delete runs to its end: nothing to cancel.
+        m.claim(":1.1", u.clone(), s.clone()).unwrap();
+        m.start_delete(":1.1", Some(7)).unwrap();
+        assert_eq!(m.release(":1.1").unwrap(), None);
+        // A run being stopped is still cancelled by a release.
+        m.claim(":1.1", u.clone(), s.clone()).unwrap();
+        let e = m.start_enroll(":1.1", "right-thumb").unwrap();
+        assert_eq!(
+            m.stop(":1.1", ActionKind::Enroll).unwrap(),
+            Stop::Cancel(e.op)
+        );
+        assert_eq!(m.release(":1.1").unwrap(), Some(e.op));
+        // And by the client leaving the bus.
+        m.claim(":1.1", u, s).unwrap();
+        let e = m.start_enroll(":1.1", "right-thumb").unwrap();
+        m.stop(":1.1", ActionKind::Enroll).unwrap();
+        assert_eq!(m.vanished(":1.1"), Some(Some(e.op)));
+    }
+
+    #[test]
+    fn only_the_current_run_ends() {
+        let mut m = ready(vec![(1000, vec![7])]);
+        m.claim(":1.1", alice().0, alice().1).unwrap();
+        let v = m.start_verify(":1.1", "any").unwrap();
+        // An earlier run ending leaves the current one running.
+        m.on_event(Event::OpEnded { op: v.op - 1 });
+        assert_eq!(
+            m.stop(":1.1", ActionKind::Verify).unwrap(),
+            Stop::Cancel(v.op)
+        );
+        // ... and being stopped.
+        m.on_event(Event::OpEnded { op: v.op - 1 });
+        assert!(m.stopping(v.op));
+        assert_eq!(
+            err_name(m.start_verify(":1.1", "any")),
+            "net.reactivated.Fprint.Error.AlreadyInUse"
+        );
+        m.on_event(Event::OpEnded { op: v.op });
+        assert!(!m.stopping(v.op));
+        m.start_verify(":1.1", "any").unwrap();
+    }
+
     #[test]
     fn finger_properties_change_once() {
         let mut m = Machine::new();
