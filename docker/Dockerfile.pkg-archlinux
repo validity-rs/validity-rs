@@ -1,0 +1,46 @@
+# Arch Linux packaging: build the package and test it (ci/packages/run.sh
+# archlinux).
+#
+#   build   Arch's own Rust (as Dockerfile.archlinux), base-devel for makepkg,
+#           namcap, and an unprivileged builder user (makepkg refuses root).
+#           Builds run in it with --network none, from the vendored tarball.
+#   test    a plain Arch with systemd as PID 1 and what the package works
+#           with (fprintd, polkit, the system bus), preinstalled so that the
+#           cycle can check that removing the package leaves the system as it
+#           found it.
+#
+# Arch is rolling: the digest pins the starting point, the packages are those
+# of the day the image is built (as in Dockerfile.archlinux).
+
+FROM archlinux:base@sha256:52dfbd5afb23a220d5ee92dafcb4c788d96c026ed04179890c23adef4c897fa0 AS build
+
+RUN pacman -Syu --noconfirm --needed \
+        base-devel \
+        namcap \
+        rust \
+    && pacman -Scc --noconfirm \
+    && useradd --create-home builder \
+    && rustc --version && makepkg --version | head -1
+
+WORKDIR /build
+CMD ["/bin/bash"]
+
+FROM archlinux:base@sha256:52dfbd5afb23a220d5ee92dafcb4c788d96c026ed04179890c23adef4c897fa0 AS test
+
+RUN pacman -Syu --noconfirm --needed \
+        curl \
+        diffutils \
+        fprintd \
+        polkit \
+    && pacman -Scc --noconfirm \
+    && pacman -Q fprintd polkit systemd curl
+
+STOPSIGNAL SIGRTMIN+3
+# Never let systemd in a test container touch a console (defence in depth: the
+# container has no host devices anyway).
+RUN systemctl mask getty.target console-getty.service getty@tty1.service \
+        serial-getty@ttyS0.service systemd-logind.service systemd-vconsole-setup.service
+# Docker mounts the container's own cgroup tree (private cgroup namespace)
+# read-only unless --privileged, which the tests never use; systemd needs it
+# writable. Only that namespace is remounted: the host's tree is not visible.
+CMD ["/bin/sh", "-c", "mount -o remount,rw /sys/fs/cgroup && exec /usr/lib/systemd/systemd"]

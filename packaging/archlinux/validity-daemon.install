@@ -1,0 +1,27 @@
+# pacman install script for validity-daemon. PAM is never touched.
+
+post_install() {
+    # A running fprintd would keep the bus name until it exits on its own.
+    systemctl stop fprintd.service >/dev/null 2>&1 || true
+    # The vendor files: downloaded once, checked by SHA-256. Offline, the
+    # installation still succeeds; the message says how to finish.
+    if ! validity-vendor install; then
+        echo "validity-daemon: the vendor files are not installed yet (see above); the sensor stays"
+        echo "validity-daemon: unavailable until 'validity-vendor install' succeeds. Password login is unaffected."
+    fi
+}
+
+post_upgrade() {
+    validity-vendor install || true
+    systemctl try-restart validity-daemon.service >/dev/null 2>&1 || true
+}
+
+pre_remove() {
+    systemctl stop validity-daemon.service >/dev/null 2>&1 || true
+}
+
+post_remove() {
+    # Calibration and vendor files go too (the enrolled fingerprints live on
+    # the sensor, not here).
+    rm -rf /var/lib/validity
+}

@@ -1,0 +1,52 @@
+# validity-daemon for Arch Linux (AUR once public), built from the vendored
+# source tarball (the sources and every crate they use), offline. Layout as on
+# Debian (docs/packaging.md), except the daemon in /usr/lib/validity-daemon/
+# (Arch avoids /usr/libexec). fprintd stays installed (its tools, polkit
+# actions and pam_fprintd are used); its unit is handed over to
+# validity-daemon by a systemd drop-in, since pacman cannot divert a file.
+# The release workflow fills in sha256sums for the published tarball.
+
+pkgname=validity-daemon
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='fprintd-compatible service for Synaptics/Validity match-on-chip fingerprint sensors'
+arch=('x86_64')
+url='https://github.com/validity-rs/validity-rs'
+license=('MIT')
+depends=('fprintd' 'polkit' 'curl' 'gcc-libs' 'glibc')
+makedepends=('cargo')
+# Both own net.reactivated.Fprint (python-validity's daemon is open-fprintd).
+conflicts=('open-fprintd' 'python-validity')
+install=validity-daemon.install
+source=("https://github.com/validity-rs/validity-rs/releases/download/v$pkgver/validity-rs-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "validity-rs-$pkgver"
+    cargo build --release --offline --locked -p validity-daemon -p validity-vendor
+}
+
+package() {
+    cd "validity-rs-$pkgver"
+    install -Dm0755 target/release/validity-daemon "$pkgdir/usr/lib/validity-daemon/validity-daemon"
+    install -Dm0755 target/release/validity-vendor "$pkgdir/usr/bin/validity-vendor"
+    # Arch keeps helpers in /usr/lib/$pkgname, not /usr/libexec.
+    sed 's|/usr/libexec/validity-daemon|/usr/lib/validity-daemon/validity-daemon|' \
+        packaging/common/systemd/validity-daemon.service >validity-daemon.service
+    grep -q '^ExecStart=/usr/lib/validity-daemon/validity-daemon$' validity-daemon.service
+    install -Dm0644 validity-daemon.service "$pkgdir/usr/lib/systemd/system/validity-daemon.service"
+    install -Dm0644 packaging/common/systemd/fprintd.service.d/validity-daemon.conf \
+        "$pkgdir/usr/lib/systemd/system/fprintd.service.d/validity-daemon.conf"
+    install -Dm0644 packaging/common/dbus-1/system.d/validity-daemon.conf \
+        "$pkgdir/usr/share/dbus-1/system.d/validity-daemon.conf"
+    install -Dm0644 packaging/common/udev/60-validity-daemon.rules \
+        "$pkgdir/usr/lib/udev/rules.d/60-validity-daemon.rules"
+    install -Dm0644 packaging/common/man/validity-vendor.8 "$pkgdir/usr/share/man/man8/validity-vendor.8"
+    install -Dm0644 packaging/common/metainfo/io.github.validity_rs.validity_daemon.metainfo.xml \
+        "$pkgdir/usr/share/metainfo/io.github.validity_rs.validity_daemon.metainfo.xml"
+    install -Dm0644 packaging/common/validity.toml.example \
+        "$pkgdir/usr/share/doc/validity-daemon/validity.toml.example"
+    install -Dm0644 README.md "$pkgdir/usr/share/doc/validity-daemon/README.md"
+    install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/validity-daemon/LICENSE"
+    install -Dm0644 NOTICE "$pkgdir/usr/share/licenses/validity-daemon/NOTICE"
+}

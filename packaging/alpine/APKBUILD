@@ -1,0 +1,48 @@
+# validity-daemon for Alpine Linux, built from the vendored source tarball (the
+# sources and every crate they use), offline. Alpine has no systemd: an OpenRC
+# service starts the daemon, and fprintd's D-Bus activation file is left as it
+# is (apk cannot divert a file), so validity-daemon must run before a client
+# asks; see docs/packaging.md. PAM is never touched.
+# Needs Rust >= 1.99: Alpine edge has it (3.24 has 1.96); CI builds on 3.24
+# with the official Rust toolchain for Alpine instead (abuild -d).
+# Maintainer: validity-rs maintainers <409744+pierre-warnier@users.noreply.github.com>
+pkgname=validity-daemon
+pkgver=0.1.0
+pkgrel=0
+pkgdesc="fprintd-compatible service for Synaptics/Validity match-on-chip fingerprint sensors"
+url="https://github.com/validity-rs/validity-rs"
+arch="x86_64 aarch64"
+license="MIT AND Apache-2.0 AND BSD-3-Clause"
+depends="fprintd dbus polkit curl ca-certificates"
+makedepends="cargo"
+install="$pkgname.post-install $pkgname.post-upgrade $pkgname.pre-deinstall $pkgname.post-deinstall"
+subpackages="$pkgname-doc $pkgname-openrc"
+source="https://github.com/validity-rs/validity-rs/releases/download/v$pkgver/validity-rs-$pkgver.tar.gz
+	validity-daemon.initd
+	"
+builddir="$srcdir/validity-rs-$pkgver"
+# The test suite needs a D-Bus daemon and curl; it runs in CI (distro:alpine).
+options="!check"
+
+build() {
+	cargo build --release --offline --locked -p validity-daemon -p validity-vendor
+}
+
+package() {
+	install -Dm0755 target/release/validity-daemon "$pkgdir"/usr/libexec/validity-daemon
+	install -Dm0755 target/release/validity-vendor "$pkgdir"/usr/sbin/validity-vendor
+	install -Dm0755 "$srcdir"/validity-daemon.initd "$pkgdir"/etc/init.d/validity-daemon
+	install -Dm0644 packaging/common/dbus-1/system.d/validity-daemon.conf \
+		"$pkgdir"/usr/share/dbus-1/system.d/validity-daemon.conf
+	install -Dm0644 packaging/common/man/validity-vendor.8 "$pkgdir"/usr/share/man/man8/validity-vendor.8
+	install -Dm0644 packaging/common/metainfo/io.github.validity_rs.validity_daemon.metainfo.xml \
+		"$pkgdir"/usr/share/metainfo/io.github.validity_rs.validity_daemon.metainfo.xml
+	install -Dm0644 packaging/common/validity.toml.example \
+		"$pkgdir"/usr/share/doc/$pkgname/validity.toml.example
+	install -Dm0644 README.md "$pkgdir"/usr/share/doc/$pkgname/README.md
+	install -Dm0644 LICENSE "$pkgdir"/usr/share/licenses/$pkgname/LICENSE
+	install -Dm0644 NOTICE "$pkgdir"/usr/share/licenses/$pkgname/NOTICE
+}
+
+sha512sums="
+"

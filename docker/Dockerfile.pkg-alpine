@@ -1,0 +1,45 @@
+# Alpine packaging: build the package and test it (ci/packages/run.sh alpine).
+#
+#   build   the official Rust 1.99.1 toolchain for Alpine 3.24 (as
+#           Dockerfile.alpine: Alpine 3.24's own rust is 1.96, below the
+#           workspace's rust-version), abuild, atools (apkbuild-lint) and an
+#           unprivileged builder user. Builds run with --network none.
+#   test    a plain Alpine 3.24 with OpenRC and what the package works with
+#           (fprintd, polkit, the system bus), preinstalled. No systemd: the
+#           container runs no init; the cycle starts OpenRC services itself.
+#
+# Pinned by version and digest; Renovate proposes the bumps.
+
+FROM rust:1.99.1-alpine3.24@sha256:b1d5dd5a22a09404d3e798c0cf051b689077360374eb505fa5bb93c479693d87 AS build
+
+RUN apk add --no-cache \
+        abuild \
+        atools \
+        bash \
+        build-base \
+        musl-dev \
+        tar \
+    && adduser -D builder \
+    && addgroup builder abuild \
+    && rustc --version && abuild -V
+
+WORKDIR /build
+CMD ["/bin/bash"]
+
+FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS test
+
+# bash, coreutils, diffutils and findutils: used by the cycle (busybox lacks
+# find -printf).
+RUN apk add --no-cache \
+        bash \
+        coreutils \
+        curl \
+        dbus \
+        diffutils \
+        findutils \
+        fprintd \
+        openrc \
+        polkit \
+    && apk info -e fprintd polkit dbus openrc curl
+
+CMD ["sleep", "infinity"]

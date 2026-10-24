@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+# validity-daemon: fprintd-compatible service (net.reactivated.Fprint) for
+# Synaptics/Validity sensors. fprintd's D-Bus activation file still names
+# fprintd, so this service must own the name before clients ask: enable it in
+# the default runlevel (rc-update add validity-daemon default).
+
+name="validity-daemon"
+description="Fingerprint service for Synaptics/Validity match-on-chip sensors"
+command="/usr/libexec/validity-daemon"
+supervisor="supervise-daemon"
+# Restarted after a crash, a bounded number of times (as the systemd unit).
+respawn_delay=5
+respawn_max=5
+respawn_period=120
+output_log="/var/log/validity-daemon.log"
+error_log="/var/log/validity-daemon.log"
+
+depend() {
+	need dbus
+	after udev
+	before xdm lightdm gdm sddm greetd
+}

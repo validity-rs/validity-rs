@@ -1,0 +1,9 @@
+#!/bin/sh
+# The vendor files: downloaded once, checked by SHA-256. Offline, the
+# installation still succeeds; the message says how to finish.
+if ! validity-vendor install; then
+	echo "validity-daemon: the vendor files are not installed yet (see above); the sensor stays" >&2
+	echo "validity-daemon: unavailable until 'validity-vendor install' succeeds. Password login is unaffected." >&2
+fi
+echo "validity-daemon: enable it with: rc-update add validity-daemon default && rc-service validity-daemon start"
+exit 0

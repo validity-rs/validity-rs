@@ -77,28 +77,31 @@ case "$distro" in
         remove_pkg() { apt-get purge -y validity-daemon; }
         pkg_files() { dpkg -L validity-daemon; }
         installed() { dpkg-query -W -f '${Status}' validity-daemon 2>/dev/null | grep -q 'install ok installed'; }
-        init=systemd
+        init=systemd daemon=/usr/libexec/validity-daemon
         ;;
     fedora)
         install_pkg() { VALIDITY_VENDOR_URL=$OFFLINE_URL dnf install -y --setopt=install_weak_deps=False "$pkg"; }
         remove_pkg() { dnf remove -y validity-daemon; }
         pkg_files() { rpm -ql validity-daemon; }
         installed() { rpm -q validity-daemon; }
-        init=systemd
+        init=systemd daemon=/usr/libexec/validity-daemon
         ;;
     archlinux)
         install_pkg() { VALIDITY_VENDOR_URL=$OFFLINE_URL pacman -U --noconfirm "$pkg"; }
         remove_pkg() { pacman -Rns --noconfirm validity-daemon; }
         pkg_files() { pacman -Qlq validity-daemon; }
         installed() { pacman -Q validity-daemon; }
-        init=systemd
+        init=systemd daemon=/usr/lib/validity-daemon/validity-daemon
         ;;
     alpine)
-        install_pkg() { VALIDITY_VENDOR_URL=$OFFLINE_URL apk add --allow-untrusted "$pkg"; }
-        remove_pkg() { apk del validity-daemon; }
+        # abuild splits the OpenRC script and the documentation into
+        # subpackages, built beside the main one.
+        subpkgs() { local d; d=$(dirname "$pkg"); ls "$d"/validity-daemon-openrc-*.apk "$d"/validity-daemon-doc-*.apk; }
+        install_pkg() { VALIDITY_VENDOR_URL=$OFFLINE_URL apk add --no-network --allow-untrusted "$pkg" $(subpkgs); }
+        remove_pkg() { apk del validity-daemon validity-daemon-openrc validity-daemon-doc; }
         pkg_files() { apk info -L validity-daemon | sed -n 's|^\([^ ]\)|/\1|p' | grep -v ' contains:'; }
         installed() { apk info -e validity-daemon; }
-        init=openrc
+        init=openrc daemon=/usr/libexec/validity-daemon
         ;;
     *) fail "unknown distro $distro" ;;
 esac
@@ -127,12 +130,12 @@ installed || fail "not installed"
 
 say "installed files"
 pkg_files | sed 's/^/    /'
-for f in /usr/libexec/validity-daemon /usr/share/dbus-1/system.d/validity-daemon.conf; do
+for f in "$daemon" /usr/share/dbus-1/system.d/validity-daemon.conf; do
     test -f "$f" || fail "missing $f"
 done
 command -v validity-vendor >/dev/null || fail "validity-vendor not on PATH"
 expect "^validity-vendor " validity-vendor --version
-expect "^validity-daemon " /usr/libexec/validity-daemon --version
+expect "^validity-daemon " "$daemon" --version
 expect "not installed" validity-vendor check
 if [ "$init" = systemd ]; then
     test -f /usr/lib/systemd/system/validity-daemon.service || fail "unit missing"
@@ -153,6 +156,7 @@ case "$distro" in
         # fprintd's file is untouched; its unit hands over to ours.
         expect "$FPRINTD_EXEC" cat "$FPRINT_SERVICE"
         expect 'validity-daemon.service' systemctl show -p Requires --value fprintd.service
+        systemd-analyze verify fprintd.service || fail "fprintd.service with the drop-in does not verify"
         ;;
     alpine)
         # No systemd: fprintd's file is untouched and validity-daemon runs as an
@@ -165,11 +169,11 @@ say "smoke test: the daemon on the emulated sensor, fprintd's client in front"
 if [ "$init" = systemd ]; then
     systemctl stop validity-daemon.service fprintd.service 2>/dev/null || true
 fi
-/usr/libexec/validity-daemon --fake-sensor --state-dir /tmp/validity-fake \
+"$daemon" --fake-sensor --state-dir /tmp/validity-fake \
     --config /usr/share/doc/validity-daemon/validity.toml.example >/tmp/fake.log 2>&1 &
 fake=$!
 wait_for has_owner net.reactivated.Fprint
-expect '/usr/libexec/validity-daemon --fake-sensor' owner_cmdline net.reactivated.Fprint
+expect "^$daemon --fake-sensor" owner_cmdline net.reactivated.Fprint
 expect 'no fingers enrolled' fprintd-list root
 kill "$fake"
 wait "$fake" || true
@@ -180,7 +184,7 @@ if [ "$init" = systemd ]; then
     say "D-Bus activation starts validity-daemon (no sensor here: no device)"
     expect 'No devices available' fprintd-list root
     wait_for has_owner net.reactivated.Fprint
-    expect '^/usr/libexec/validity-daemon' owner_cmdline net.reactivated.Fprint
+    expect "^$daemon" owner_cmdline net.reactivated.Fprint
     expect '^active$' systemctl is-active validity-daemon.service
     journalctl -u validity-daemon.service --no-pager | tail -5 | sed 's/^/    /'
     # Left running: removing the package must stop it.
@@ -188,7 +192,7 @@ else
     say "OpenRC service owns the name (no sensor here: no device)"
     rc-service validity-daemon start
     wait_for has_owner net.reactivated.Fprint
-    expect '^/usr/libexec/validity-daemon' owner_cmdline net.reactivated.Fprint
+    expect "^$daemon" owner_cmdline net.reactivated.Fprint
     expect 'No devices available' fprintd-list root
     # Left running: removing the package must stop it.
 fi
@@ -205,7 +209,7 @@ has_owner net.reactivated.Fprint || fail "the daemon should be running here"
 remove_pkg
 installed && fail "still installed"
 wait_for no_owner net.reactivated.Fprint
-if running /usr/libexec/validity-daemon; then fail "validity-daemon still running after removal"; fi
+if running "$daemon"; then fail "validity-daemon still running after removal"; fi
 
 say "fprintd has its activation back"
 expect "$FPRINTD_EXEC" cat "$FPRINT_SERVICE"

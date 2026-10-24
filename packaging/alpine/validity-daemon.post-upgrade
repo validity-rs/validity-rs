@@ -1,0 +1,3 @@
+#!/bin/sh
+validity-vendor install || true
+exit 0

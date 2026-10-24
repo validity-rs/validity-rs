@@ -26,7 +26,7 @@ OUT=$(cd "$OUT" && pwd)
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 TARBALL=validity-rs-$VERSION.tar.gz
 export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct HEAD)}
-DISTROS=(debian)
+DISTROS=(debian fedora archlinux alpine)
 CPUS=()
 [ -n "${PKG_CPUS:-}" ] && CPUS=(--cpuset-cpus "$PKG_CPUS")
 

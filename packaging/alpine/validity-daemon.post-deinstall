@@ -1,0 +1,5 @@
+#!/bin/sh
+# Calibration and vendor files go too (the enrolled fingerprints live on the
+# sensor, not here).
+rm -rf /var/lib/validity
+exit 0

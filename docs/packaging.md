@@ -9,6 +9,9 @@ all of it, locally and in GitHub Actions (`.github/workflows/packages.yml`).
 ci/packages/run.sh                 # every job below
 ci/packages/run.sh source          # the vendored source tarball
 ci/packages/run.sh debian          # build, lintian, install/smoke/remove cycle
+ci/packages/run.sh fedora          # the same with rpmbuild/rpmlint
+ci/packages/run.sh archlinux       # makepkg/namcap
+ci/packages/run.sh alpine          # abuild/apkbuild-lint, OpenRC
 ci/packages/run.sh repro           # build the .deb twice and compare
 ci/packages/run.sh apt             # APT repository: install, then unattended upgrade
 PKG_CPUS=16-19 ci/packages/run.sh debian   # keep the containers on some CPUs
@@ -146,6 +149,76 @@ daemon logs that it has no sleep inhibitor and carries on.
 `SOURCE_DATE_EPOCH` (the commit time) fixes every timestamp: the tarball, the
 files in the package and the archive members. `ci/packages/run.sh repro` builds
 the .deb twice from the same tarball and compares the files.
+
+## Fedora
+
+`packaging/rpm/validity-daemon.spec`, built with `rpmbuild` in
+`docker/Dockerfile.pkg-fedora` (Fedora 44, its own Rust 1.99.0, the same pinned
+image as the CI's Fedora job) from the source tarball, offline; `rpmlint` must
+report no error. Same layout as on Debian.
+
+Replacing fprintd: Fedora's `fprintd-pam` requires `fprintd` at the same
+version, so `Conflicts`/`Provides: fprintd` would remove PAM support, and RPM
+cannot divert fprintd's activation file. That file starts `fprintd.service`
+(`SystemdService=`), and on Fedora (dbus-broker) activation always goes through
+systemd. So the package ships a drop-in,
+`/usr/lib/systemd/system/fprintd.service.d/validity-daemon.conf`
+(`packaging/common/systemd/fprintd.service.d/`), that turns `fprintd.service`
+into a hand-over: `Requires=`/`After=validity-daemon.service`, and a
+`Type=oneshot` `/usr/bin/true` in place of fprintd. No file of fprintd's is
+touched, `rpm -V fprintd` stays clean, fprintd's updates change nothing, and
+removing the package removes the drop-in: fprintd is back. `%post` stops a
+running fprintd and runs `validity-vendor install`; `%postun` on erase removes
+`/var/lib/validity`. `Conflicts: open-fprintd, python3-validity`.
+
+Firmware policy: the package contains no vendor material (it is MIT); the
+Lenovo file is downloaded on the user's machine. **COPR** accepts that: its
+rules ("What I can build in Copr", fedora-copr/copr
+`doc/user_documentation.rst`, checked 2026-10-24) forbid uploading material one
+has no right to distribute or under a licence Fedora does not allow, and state
+that COPR packages need not follow the Packaging Guidelines. **RPM Fusion**
+follows the Fedora Packaging Guidelines (rpmfusion.org/Contributors), which do
+not let scriptlets download, and its `nonfree` section is for redistributable
+software; there the download would have to become a manual step (the lpf
+approach). So: COPR first, RPM Fusion later if wanted, without the `%post`
+download. COPR builds need a COPR project and a token (see Releases).
+
+## Arch Linux
+
+`packaging/archlinux/PKGBUILD` and `validity-daemon.install`, built with
+`makepkg` (as an unprivileged user) in `docker/Dockerfile.pkg-archlinux` (Arch's
+own Rust), from the source tarball pinned by its sha256, offline; `namcap` must
+report no error. The CI also writes the PKGBUILD for the AUR: the release URL
+and the published tarball's sha256. Arch avoids `/usr/libexec`, so the daemon is
+`/usr/lib/validity-daemon/validity-daemon` and the unit is rewritten to match.
+fprintd is replaced as on Fedora (pacman cannot divert either; same drop-in).
+`conflicts=(open-fprintd python-validity)`: both own the bus name. Publishing to
+the AUR needs an AUR account and its SSH key (see Releases).
+
+## Alpine
+
+`packaging/alpine/APKBUILD`, an OpenRC script (`validity-daemon.initd`, under
+`supervise-daemon`, restarted 5 times per 120 s at most) and install scripts,
+built with `abuild` in `docker/Dockerfile.pkg-alpine`; `apkbuild-lint` must be
+clean. Alpine 3.24's Rust is 1.96, below the workspace's 1.99, so CI builds
+with the official Rust 1.99.1 toolchain for Alpine 3.24 (`abuild -d`); in
+aports the package would wait for Alpine 3.25 (edge has 1.99.1). The package is
+signed with a throwaway key in CI (the cycle installs it with
+`--allow-untrusted`).
+
+D-Bus activation and polkit on Alpine: both work (dbus 1.16, polkit 127), but
+without systemd the bus starts the `Exec=` of the activation file itself, and
+that file is fprintd's (apk cannot divert it, and taking it over with
+`replaces=` would lose it for good on removal). So on Alpine validity-daemon is
+an OpenRC service that must own `net.reactivated.Fprint` before any client asks:
+`rc-update add validity-daemon default` (the post-install message says so; it
+starts after `dbus` and before the display managers). If it is not running, a
+client activates fprintd, which finds no supported sensor, and PAM falls back
+to the password. `fprintd-pam` does not depend on `fprintd` on Alpine, but
+fprintd's tools and polkit actions do, hence the dependency. The cycle starts
+OpenRC's `dbus` service in a plain container, checks that the OpenRC service
+owns the name and answers `fprintd-list`, and that removal gives fprintd's
+activation back. No udev rule is shipped (it only starts a systemd unit).
 
 ## APT repository
 
@@ -293,3 +366,6 @@ checked against the checksums in `vendor/`. The tarball itself is reproducible
 | lintian | 2.122.0 | trixie |
 | Rust | 1.99.1 | `rust:1.99.1-trixie`, pinned by digest |
 | Debian | 13 (trixie) | `debian:trixie@sha256:4c25275446ca…`, pinned by digest |
+| Fedora | 44 | `fedora:latest@sha256:43b29f65a41e…` (as the CI's Fedora job) |
+| Arch Linux | rolling | `archlinux:base@sha256:52dfbd5afb23…` (as the CI's Arch job) |
+| Alpine | 3.24.3 | `alpine:3.24.3@sha256:be2656061b53…`; build: `rust:1.99.1-alpine3.24@sha256:b1d5dd5a22a0…` |

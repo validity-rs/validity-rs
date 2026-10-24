@@ -1,0 +1,50 @@
+# Fedora packaging: build the RPM and test it (ci/packages/run.sh fedora).
+#
+#   build   Fedora's own Rust (as Dockerfile.fedora), rpm-build and rpmlint.
+#           Builds run in it with --network none, from the vendored tarball.
+#   test    a plain Fedora with systemd as PID 1 and what the package works
+#           with (fprintd, polkit, the system bus), preinstalled so that the
+#           cycle can check that removing the package leaves the system as it
+#           found it.
+#
+# Same pinned base as Dockerfile.fedora; Renovate proposes the bumps.
+
+FROM fedora:latest@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80 AS build
+
+RUN dnf install -y \
+        cargo \
+        gcc \
+        rpm-build \
+        rpmlint \
+        rust \
+        systemd-rpm-macros \
+    && dnf clean all \
+    && rustc --version && rpmbuild --version && rpmlint --version
+
+WORKDIR /build
+CMD ["/bin/bash"]
+
+FROM fedora:latest@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80 AS test
+
+# dbus-tools (dbus-send), diffutils, findutils and gawk: used by the cycle.
+RUN dnf install -y \
+        curl \
+        dbus-tools \
+        diffutils \
+        findutils \
+        fprintd \
+        gawk \
+        polkit \
+        systemd \
+    && dnf clean all \
+    && rpm -q fprintd polkit systemd curl
+
+STOPSIGNAL SIGRTMIN+3
+# Never let systemd in a test container touch a console (defence in depth: the
+# container has no host devices anyway).
+RUN systemctl mask getty.target console-getty.service getty@tty1.service \
+        serial-getty@ttyS0.service systemd-logind.service systemd-vconsole-setup.service
+# Docker mounts the container's own cgroup tree (private cgroup namespace)
+# read-only unless --privileged, which the tests never use; systemd needs it
+# writable. Only that namespace is remounted: the host's tree is not visible.
+CMD ["/bin/sh", "-c", "mount -o remount,rw /sys/fs/cgroup && exec /usr/lib/systemd/systemd"]
