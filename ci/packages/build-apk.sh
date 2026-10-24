@@ -35,6 +35,8 @@ vars="$vars SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH SRCDEST=$work REPODEST=/home/bu
 [ -n "${CARGO_BUILD_JOBS:-}" ] && vars="$vars CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"
 as_builder() { su builder -s /bin/sh -c "cd '$work' && env $vars $*"; }
 as_builder abuild-keygen -a -n -q
+# abuild signs the index with that key: apk must trust its public half.
+cp /home/builder/.abuild/*.rsa.pub /etc/apk/keys/
 as_builder abuild checksum
 as_builder abuild -d
 mkdir -p "$out"

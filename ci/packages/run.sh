@@ -9,6 +9,9 @@
 #   ci/packages/run.sh apt             # APT repository from the .deb: apt install
 #                                      # and unattended upgrade in a clean trixie
 #   ci/packages/run.sh repro           # build the .deb twice, compare
+#   ci/packages/run.sh keyring         # the keyring package, real public key
+#   ci/packages/run.sh apttree         # the signed APT tree (release; needs
+#                                      # APT_SIGNING_KEY and target/packages/apt-debs)
 #
 # Environment:
 #   SOURCE_TREE     git tree-ish to package (default HEAD)
@@ -191,9 +194,11 @@ job_apt() {
     docker network create "$net" >/dev/null
     NETWORKS+=("$net")
     # The repository server: the published tree, swapped for the next one.
+    # Copied, not preserved: fresh mtimes, so that If-Modified-Since sees the
+    # new publication (the two trees are written within the same second).
     server=$(docker run -d "${CPUS[@]}" --network "$net" --network-alias apt-repo \
         --tmpfs /srv -v "$OUT/apt:/repos:ro" "$(image debian build)" \
-        sh -c 'cp -a /repos/v1/. /srv/ && exec python3 -I -m http.server 8000 --directory /srv')
+        sh -c 'cp -R /repos/v1/. /srv/ && exec python3 -I -m http.server 8000 --directory /srv')
     client=$(docker run -d "${CPUS[@]}" --network "$net" "${SYSTEMD_CTR[@]}" \
         --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
         -v "$ROOT/ci/packages:/ci:ro" "$(image debian apt-client)")
@@ -202,11 +207,34 @@ job_apt() {
     not_privileged "$client"
     {
         docker exec "$client" bash /ci/apt-client.sh install \
-            && docker exec "$server" sh -c 'rm -rf /srv/* && cp -a /repos/v2/. /srv/' \
+            && docker exec "$server" sh -c 'rm -rf /srv/* && cp -R /repos/v2/. /srv/' \
             && docker exec "$client" bash /ci/apt-client.sh upgrade
     } || status=$?
     [ "$status" -eq 0 ] || docker logs "$server" 2>&1 | tail -30
     return "$status"
+}
+
+# The release's keyring package, with the real public key
+# (packaging/apt/validity-rs-archive-keyring.gpg).
+job_keyring() {
+    rm -rf "$OUT/keyring"
+    docker run --rm "${CPUS[@]}" --network none \
+        -v "$ROOT/ci/packages:/ci:ro" -v "$ROOT/packaging:/packaging:ro" -v "$OUT:/out" \
+        -e SOURCE_DATE_EPOCH "$(image debian build)" \
+        bash /ci/build-keyring.sh /packaging/apt/validity-rs-archive-keyring.gpg /out/keyring
+    own
+}
+
+# The published APT tree (release workflow): every .deb in $OUT/apt-debs,
+# signed with the subkey in APT_SIGNING_KEY, into $OUT/apt-tree.
+job_apttree() {
+    : "${APT_SIGNING_KEY:?}"
+    rm -rf "$OUT/apt-tree"
+    docker run --rm "${CPUS[@]}" --network none \
+        -v "$ROOT/ci/packages:/ci:ro" -v "$ROOT/packaging:/packaging:ro" -v "$OUT:/out" \
+        -e SOURCE_DATE_EPOCH -e APT_SIGNING_KEY "$(image debian build)" \
+        bash /ci/apt-sign-tree.sh /out/apt-debs /out/apt-tree
+    own
 }
 
 # One job per process: bash ignores set -e inside a function called from a

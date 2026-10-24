@@ -164,8 +164,11 @@ cannot divert fprintd's activation file. That file starts `fprintd.service`
 systemd. So the package ships a drop-in,
 `/usr/lib/systemd/system/fprintd.service.d/validity-daemon.conf`
 (`packaging/common/systemd/fprintd.service.d/`), that turns `fprintd.service`
-into a hand-over: `Requires=`/`After=validity-daemon.service`, and a
-`Type=oneshot` `/usr/bin/true` in place of fprintd. No file of fprintd's is
+into a hand-over: `Requires=`/`After=validity-daemon.service`, a
+`Type=oneshot` `/usr/bin/true` in place of fprintd, and a placeholder
+`BusName=` (systemd refuses two units declaring one bus name, and an empty
+`BusName=` does not clear it; activation follows the activation file's
+`SystemdService=`, not `BusName=`). No file of fprintd's is
 touched, `rpm -V fprintd` stays clean, fprintd's updates change nothing, and
 removing the package removes the drop-in: fprintd is back. `%post` stops a
 running fprintd and runs `validity-vendor install`; `%postun` on erase removes
@@ -348,6 +351,119 @@ failed. That trade-off can be revisited once publication is routine.
 4. Publishes `v2` on the server; `unattended-upgrade --dry-run` must list
    validity-daemon and change nothing, then `unattended-upgrade` must upgrade it
    to revision 2 and restart the running daemon.
+
+## Releases
+
+`.github/workflows/release.yml` runs on a tag `v<version>` (the version in
+`Cargo.toml`), or `v<version>-<pre>` for a prerelease. `workflow_dispatch` is a
+dry run: everything is built and checked, nothing is signed, attested or
+published.
+
+1. **Gate** (`ci/packages/release-check.sh`): the tag names Cargo.toml's
+   version, and the CI and Packages workflows are green on the tagged commit
+   (it waits for them while they run).
+2. **One source tarball**, then every package built from it in its pinned image
+   and run through its install cycle again; the .deb is rebuilt and compared
+   (`repro`); the keyring package is built with the real public key.
+3. **SHA256SUMS** over every file, signed (`SHA256SUMS.asc`) by the archive
+   signing subkey in the `apt` environment and checked with `gpgv` against
+   `packaging/apt/validity-rs-archive-keyring.gpg`. Without the secret a
+   prerelease goes out unsigned with a warning; a release fails.
+4. **Provenance**: `actions/attest-build-provenance` v4.2.2 (pinned by commit)
+   attests every file, and each attestation is verified at once with
+   `gh attestation verify`.
+5. **A draft GitHub release** with all files. A maintainer reviews it and
+   publishes it.
+6. Publication jobs, each off until its repository variable is `1`:
+   `CRATES_IO_PUBLISH`, `APT_PUBLISH`, `COPR_PUBLISH`, `AUR_PUBLISH`.
+
+Files of a release: `validity-rs-<v>.tar.gz` (the vendored sources),
+`validity-daemon_<v>-1_amd64.deb`, `validity-rs-archive-keyring_<date>_all.deb`,
+`validity-daemon-<v>-1.fc44.x86_64.rpm` and its `.src.rpm`,
+`validity-daemon-<v>-1-x86_64.pkg.tar.zst`, the three Alpine `.apk`
+(daemon, `-openrc`, `-doc`), `validity-daemon-<v>-aur.tar.gz` (PKGBUILD pinned to
+the tarball, `.SRCINFO`, install script), `validity-daemon-<v>-APKBUILD`,
+`SHA256SUMS`, `SHA256SUMS.asc`. Check a download with:
+
+```bash
+gh attestation verify <file> --repo validity-rs/validity-rs
+gpgv --keyring ./validity-rs-archive-keyring.gpg SHA256SUMS.asc SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+```
+
+A test tag exercises the whole chain without a real release:
+`git tag -a v0.1.0-rc.1 -m 'validity-rs 0.1.0-rc.1' && git push origin v0.1.0-rc.1`
+gives a draft prerelease (not visible to the public); delete the draft and the
+tag afterwards (`gh release delete v0.1.0-rc.1 --cleanup-tag`).
+
+### crates.io
+
+Publication goes through Trusted Publishing (`rust-lang/crates-io-auth-action`
+v1.0.6: an OIDC token exchanged for a short-lived crates.io token, revoked at the
+end of the job; nothing is stored), crates in dependency order (validity-proto,
+validity-vendor, validity-daemon), a version already published is skipped
+(`ci/packages/publish-crates.sh`). Only final versions, never prereleases.
+
+**The first version of each crate still needs an ordinary token.** crates.io
+refuses to create a crate with a Trusted Publishing token: `publish.rs`
+answers "Trusted Publishing tokens do not support creating new crates. Publish
+the crate manually, first" (rust-lang/crates.io, `src/controllers/krate/publish.rs`,
+checked at commit fbca83038e59, 2026-10-24), and a Trusted Publisher is
+configured on an existing crate. So, once, after the publication audit:
+
+1. On crates.io, make an API token with the `publish-new` scope and a short
+   expiry; `cargo login`; `cargo publish -p validity-proto`, then
+   `-p validity-vendor`, then `-p validity-daemon`; revoke the token.
+2. For each crate, *Settings, Trusted Publishing*: GitHub, repository
+   `validity-rs/validity-rs`, workflow `release.yml`, environment `crates-io`.
+3. Create the `crates-io` environment (tags only, as `apt` below) and
+   `gh variable set CRATES_IO_PUBLISH --body 1 -R validity-rs/validity-rs`.
+
+### APT repository on GitHub Pages
+
+The repository is `validity-rs/apt` (Pages is free for public repositories),
+served from its `gh-pages` branch. The `apt` job rebuilds the tree from the
+release's .deb files plus the latest fingerprint-settings release
+(`ci/packages/run.sh apttree`), and commits it to that branch (history kept,
+never forced) with that repository's deploy key. Setting it up, once:
+
+```bash
+# The repository, with a gh-pages branch.
+gh repo create validity-rs/apt --public --description 'APT repository of validity-rs (Debian 13)'
+d=$(mktemp -d) && cd "$d" && git init -q -b gh-pages
+echo 'validity-rs APT repository: https://github.com/validity-rs/validity-rs/blob/master/docs/packaging.md' >README.md
+touch .nojekyll && git add . && git commit -qm 'APT repository'
+git remote add origin git@github.com:validity-rs/apt.git && git push -u origin gh-pages
+# Pages from gh-pages.
+gh api -X POST repos/validity-rs/apt/pages -f 'source[branch]=gh-pages' -f 'source[path]=/'
+# A deploy key, writable, for that repository only.
+ssh-keygen -q -t ed25519 -N '' -C 'validity-rs release workflow' -f apt_deploy
+gh repo deploy-key add apt_deploy.pub -R validity-rs/apt --allow-write --title 'validity-rs release workflow'
+# The "apt" environment of validity-rs/validity-rs: tags only, both secrets.
+gh api -X PUT repos/validity-rs/validity-rs/environments/apt \
+    -F 'deployment_branch_policy[protected_branches]=false' \
+    -F 'deployment_branch_policy[custom_branch_policies]=true'
+gh api -X POST repos/validity-rs/validity-rs/environments/apt/deployment-branch-policies \
+    -f name='v*' -f type=tag
+gh secret set APT_DEPLOY_KEY --env apt -R validity-rs/validity-rs <apt_deploy
+gh secret set APT_SIGNING_KEY --env apt -R validity-rs/validity-rs <APT_SIGNING_KEY.asc   # see "The key"
+shred -u apt_deploy APT_SIGNING_KEY.asc
+gh variable set APT_PUBLISH --body 1 -R validity-rs/validity-rs
+```
+
+The next tag then publishes. Check it from any trixie machine with the
+bootstrap above.
+
+### COPR and the AUR
+
+COPR: a COPR project `validity-rs/validity-daemon` (Fedora account), its
+`copr-cli` configuration as secret `COPR_CONFIG` of a `copr` environment, and
+`COPR_PUBLISH=1`; each release's source RPM is then built there. AUR: an AUR
+account, the package `validity-daemon` created by a first push of
+`validity-daemon-<v>-aur.tar.gz`'s files, the account's SSH key as secret
+`AUR_SSH_KEY` of an `aur` environment, and `AUR_PUBLISH=1`. Both hosts' keys
+are pinned in the workflow (GitHub's from `api.github.com/meta`, the AUR's
+matching the fingerprint published on aur.archlinux.org).
 
 ## The source tarball
 
