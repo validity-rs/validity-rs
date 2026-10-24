@@ -1,0 +1,33 @@
+#!/bin/sh
+# Installs the vendor files (download from Lenovo, checked by SHA-256) unless
+# they are already in place. A failure (offline, for example) does not fail
+# the installation: password login never depends on them, and the message says
+# how to finish by hand. PAM is never touched.
+set -e
+
+case "$1" in
+    configure)
+        # A running fprintd (still owning the bus name) would keep
+        # validity-daemon from starting until it exits on its own.
+        if [ -d /run/systemd/system ]; then
+            deb-systemd-invoke stop fprintd.service >/dev/null 2>&1 || true
+        fi
+        status=0
+        validity-vendor install || status=$?
+        if [ "$status" -ne 0 ]; then
+            echo "validity-daemon: the vendor files are not installed yet (see above)." >&2
+            echo "validity-daemon: the fingerprint sensor stays unavailable until" >&2
+            echo "validity-daemon: 'validity-vendor install' succeeds; password login is unaffected." >&2
+        fi
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        echo "postinst called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

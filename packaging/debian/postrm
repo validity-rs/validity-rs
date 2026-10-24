@@ -1,0 +1,27 @@
+#!/bin/sh
+# Gives fprintd its D-Bus activation file back (see preinst). Purge also
+# removes the state: calibration and the vendor files.
+set -e
+
+FPRINT_SERVICE=/usr/share/dbus-1/system-services/net.reactivated.Fprint.service
+DIVERTED=$FPRINT_SERVICE.fprintd
+
+case "$1" in
+    remove|abort-install|disappear)
+        dpkg-divert --package validity-daemon --remove --rename \
+            --divert "$DIVERTED" "$FPRINT_SERVICE"
+        ;;
+    purge)
+        rm -rf /var/lib/validity
+        ;;
+    upgrade|failed-upgrade|abort-upgrade)
+        ;;
+    *)
+        echo "postrm called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

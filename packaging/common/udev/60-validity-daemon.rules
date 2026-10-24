@@ -1,0 +1,6 @@
+# validity-daemon: start the service when a supported Synaptics/Validity sensor
+# appears (boot, hotplug, re-enumeration after resume), so that the first
+# fingerprint request does not wait for the sensor to open. D-Bus activation
+# starts it too; this only starts it earlier. Nothing else is changed: no
+# permissions (the daemon runs as root) and no power settings.
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="06cb", ATTR{idProduct}=="009a", TAG+="systemd", ENV{SYSTEMD_WANTS}+="validity-daemon.service"

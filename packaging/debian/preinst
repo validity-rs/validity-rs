@@ -1,0 +1,27 @@
+#!/bin/sh
+# validity-daemon takes over fprintd's D-Bus activation file, so that
+# pam_fprintd, fprintd's tools and desktops reach validity-daemon. Only that
+# file is diverted; fprintd's bus policy and polkit actions are used as they are.
+# postrm removes the diversion, which gives the file back to fprintd.
+set -e
+
+FPRINT_SERVICE=/usr/share/dbus-1/system-services/net.reactivated.Fprint.service
+# Not ending in .service: dbus-daemon ignores it.
+DIVERTED=$FPRINT_SERVICE.fprintd
+
+case "$1" in
+    install|upgrade)
+        dpkg-divert --package validity-daemon --add --rename \
+            --divert "$DIVERTED" "$FPRINT_SERVICE"
+        ;;
+    abort-upgrade)
+        ;;
+    *)
+        echo "preinst called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

@@ -1,0 +1,77 @@
+name: Packages
+
+# Every package built from one vendored source tarball in its pinned distro
+# image, without network, then installed, smoke-tested and removed in a fresh
+# container (ci/packages/run.sh, docs/packaging.md). The weekly run also
+# downloads Lenovo's real vendor package in the cycles.
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "37 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: "10"
+
+jobs:
+  source:
+    name: Vendored source tarball
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # SOURCE_DATE_EPOCH is the commit time.
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Build the tarball
+        run: ci/packages/run.sh source
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: source
+          path: target/packages/validity-rs-*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  package:
+    name: Package (${{ matrix.job }})
+    needs: source
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        job: [debian, repro]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: source
+          path: target/packages
+      - name: Build, install, smoke-test, remove
+        run: ci/packages/run.sh "$JOB"
+        env:
+          JOB: ${{ matrix.job }}
+          KEEP_SOURCE: "1"
+          VENDOR_ONLINE: ${{ github.event_name == 'schedule' && '1' || '' }}
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packages-${{ matrix.job }}
+          path: |
+            target/packages/*/*.deb
+            target/packages/*/*.rpm
+            target/packages/*/*.pkg.tar.zst
+            target/packages/*/*.apk
+          if-no-files-found: ignore
+          retention-days: 7

@@ -22,3 +22,42 @@ zruntime = { version = "0.2.1", default-features = false, features = ["runtime",
 
 [lints]
 workspace = true
+
+# The Debian package (cargo-deb), built by ci/packages/run.sh from the vendored
+# source tarball; see docs/packaging.md. Paths are relative to this directory.
+[package.metadata.deb]
+maintainer = "validity-rs maintainers <409744+pierre-warnier@users.noreply.github.com>"
+copyright = "2026 validity-rs contributors; portions 2020 uunicorn (python-validity, MIT)"
+license-file = ["../../LICENSE", "0"]
+section = "admin"
+priority = "optional"
+extended-description = """\
+validity-daemon serves fprintd's D-Bus API (net.reactivated.Fprint) for the \
+Synaptics/Validity match-on-chip fingerprint sensors that libfprint does not \
+support (06cb:009a: ThinkPad T480, T480s, X280, X1 Carbon 6th gen). \
+pam_fprintd, fprintd's tools and desktops keep working unchanged. \
+It replaces fprintd's daemon by taking over its D-Bus activation file only; \
+removing this package gives fprintd its file back. PAM is not configured: \
+enabling fingerprint login (always 'sufficient', never 'required') is the \
+administrator's choice. The Synaptics vendor files, which may not be \
+redistributed, are downloaded on installation by validity-vendor and checked \
+by SHA-256."""
+depends = "$auto, fprintd, polkitd, curl, ca-certificates"
+suggests = "libpam-fprintd"
+conflicts = "open-fprintd, python3-validity"
+maintainer-scripts = "../../packaging/debian/"
+changelog = "../../packaging/debian/changelog"
+systemd-units = { unit-scripts = "../../packaging/common/systemd/", enable = false, start = false, restart-after-upgrade = true }
+assets = [
+    ["target/release/validity-daemon", "usr/libexec/", "755"],
+    ["target/release/validity-vendor", "usr/sbin/", "755"],
+    ["../../packaging/common/dbus-1/system-services/net.reactivated.Fprint.service", "usr/share/dbus-1/system-services/", "644"],
+    ["../../packaging/common/dbus-1/system.d/validity-daemon.conf", "usr/share/dbus-1/system.d/", "644"],
+    ["../../packaging/common/udev/60-validity-daemon.rules", "usr/lib/udev/rules.d/", "644"],
+    ["../../packaging/common/man/validity-vendor.8", "usr/share/man/man8/", "644"],
+    ["../../packaging/common/metainfo/io.github.validity_rs.validity_daemon.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["../../packaging/debian/lintian-overrides", "usr/share/lintian/overrides/validity-daemon", "644"],
+    ["../../packaging/common/validity.toml.example", "usr/share/doc/validity-daemon/", "644"],
+    ["../../README.md", "usr/share/doc/validity-daemon/", "644"],
+    ["../../NOTICE", "usr/share/doc/validity-daemon/", "644"],
+]

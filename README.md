@@ -7,7 +7,8 @@ A Rust driver and fprintd-compatible D-Bus service for the **Synaptics/Validity
 > **Status: pre-alpha.** The full protocol works on real hardware (`06cb:009a`, ThinkPad
 > T480): pairing, firmware upload, calibration, enrolment and identification, all in
 > Rust. The D-Bus service passes its end-to-end tests with fprintd's own clients and
-> `pam_fprintd`, but has not yet run on hardware. There are no packages yet.
+> `pam_fprintd`, but has not yet run on hardware. A Debian package is built and tested
+> in CI ([packaging](docs/packaging.md)); it has not yet been installed on hardware.
 > Do not rely on it for logging in.
 
 ## Why
@@ -63,7 +64,11 @@ crates/validity-daemon   net.reactivated.Fprint D-Bus service (zbus), polkit, lo
 crates/validity-vendor   installs the Synaptics vendor files from Lenovo's package
                          (download, SHA-256 checks, Inno Setup extraction, atomic
                          switch into /var/lib/validity/vendor)
-packaging/common         systemd unit, D-Bus activation file and bus policy
+packaging/common         systemd unit, D-Bus activation file and bus policy, udev rule,
+                         man page, AppStream metadata, example configuration
+packaging/debian         Debian maintainer scripts (cargo-deb metadata: the daemon's
+                         Cargo.toml)
+ci/packages/             package builds and install/smoke/remove cycles (run.sh)
 fuzz/                    cargo-fuzz targets for every parser and the handshake
 tools/oracle/            python-validity scripts that generate the test vectors
 ci/                      the CI, runnable locally (ci/run.sh) and end-to-end tests
@@ -72,6 +77,28 @@ ci/                      the CI, runnable locally (ci/run.sh) and end-to-end tes
 A desktop app to enrol and manage fingerprints on desktops without one (XFCE, MATE,
 LXQt) lives in its own repository, `fingerprint-settings`. It only uses the standard
 fprintd API.
+
+## Installing
+
+On Debian 13 (trixie), from the `.deb` built by CI or by `ci/packages/run.sh debian`
+(in `target/packages/debian/`):
+
+```bash
+sudo apt install ./validity-daemon_0.1.0-1_amd64.deb
+```
+
+The package depends on `fprintd` and takes over only its D-Bus activation file, so
+fprintd's tools, `pam_fprintd` and desktops reach validity-daemon. Removing the
+package gives fprintd its file back. During installation `validity-vendor install`
+downloads Lenovo's driver package and installs the two Synaptics files the sensor
+needs, checked by SHA-256. If the machine is offline, the installation still
+succeeds, and you finish later with `sudo validity-vendor install`.
+
+The package never changes PAM. To log in with a finger, install `libpam-fprintd`
+and keep the fingerprint `sufficient`, never `required`, so that the password
+always works. Enrol with `fprintd-enroll`.
+
+Details, other distributions and the CI cycle: [docs/packaging.md](docs/packaging.md).
 
 ## Building and testing
 

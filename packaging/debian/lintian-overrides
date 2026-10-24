@@ -1,0 +1,7 @@
+# Published in the project's own APT repository, not the Debian archive:
+# there is no ITP bug for a first upload to close.
+validity-daemon: initial-upload-closes-no-bugs
+# Rust binaries: the fortified glibc functions lintian looks for are C ones.
+# The only C code linked is libc itself.
+validity-daemon: hardening-no-fortify-functions [usr/libexec/validity-daemon]
+validity-daemon: hardening-no-fortify-functions [usr/sbin/validity-vendor]

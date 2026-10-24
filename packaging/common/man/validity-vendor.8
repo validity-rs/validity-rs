@@ -1,0 +1,66 @@
+.TH VALIDITY-VENDOR 8 "2026-10-24" "validity-rs" "System Administration"
+.SH NAME
+validity-vendor \- install the Synaptics vendor files used by validity-daemon
+.SH SYNOPSIS
+.B validity-vendor install
+.RB [ \-\-archive
+.IR FILE " |"
+.B \-\-url
+.IR URL ]
+.RB [ \-\-dir
+.IR DIR ]
+.br
+.B validity-vendor check
+.RB [ \-\-dir
+.IR DIR ]
+.SH DESCRIPTION
+.B validity-daemon
+needs two files from Lenovo's Synaptics driver package
+.IR nz3gf07w.exe ,
+which may not be redistributed: the driver DLL, which holds the sensor command
+blobs, and the sensor firmware extension.
+.B validity-vendor install
+downloads the package on this machine, checks its SHA\-256, extracts the two
+files, checks theirs, and switches them into
+.I DIR/vendor
+in one atomic step. If the files are already in place and intact, it does
+nothing and does not use the network. A failure leaves the previous state
+untouched. The packages run it after installation; run it again by hand
+(as root) if the machine was offline then.
+.PP
+.B validity-vendor check
+reports whether the files are in place and intact.
+.PP
+Password login never depends on these files: without them the fingerprint
+sensor is simply unavailable.
+.SH OPTIONS
+.TP
+.BI \-\-archive " FILE"
+Use a copy of
+.I nz3gf07w.exe
+already on disk, for example one downloaded on another machine. No network is
+used.
+.TP
+.BI \-\-url " URL"
+Download from
+.I URL
+(a mirror) instead of Lenovo. The SHA\-256 check is the same.
+.TP
+.BI \-\-dir " DIR"
+Installation directory, default
+.IR /var/lib/validity .
+.SH ENVIRONMENT
+.TP
+.B VALIDITY_VENDOR_URL
+Default for
+.BR \-\-url .
+.SH EXIT STATUS
+0 done or already in place, 1 error, 2 usage error, 3 download failed,
+4 (check) files missing or damaged.
+.SH FILES
+.TP
+.I /var/lib/validity/vendor
+Link to the installed set of files.
+.SH SEE ALSO
+.UR https://github.com/validity-rs/validity-rs
+.UE

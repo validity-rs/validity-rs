@@ -1,0 +1,6 @@
+validity-daemon (0.1.0-1) unstable; urgency=medium
+
+  * First package: validity-daemon in place of fprintd's daemon, the
+    validity-vendor installer, systemd unit, udev rule and D-Bus files.
+
+ -- validity-rs maintainers <409744+pierre-warnier@users.noreply.github.com>  Sat, 24 Oct 2026 12:00:00 +0000

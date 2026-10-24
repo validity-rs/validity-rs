@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata: the USB IDs this package drives, so that software
+     centres can suggest it on machines with one of these sensors. -->
+<component type="driver">
+  <id>io.github.validity_rs.validity_daemon</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>validity-daemon</name>
+  <summary>Fingerprint service for Synaptics/Validity match-on-chip sensors</summary>
+  <description>
+    <p>
+      An fprintd-compatible service for the Synaptics/Validity match-on-chip
+      fingerprint sensors that libfprint does not support, such as the one in
+      the ThinkPad T480. Login, the lock screen and fprintd's tools keep working
+      unchanged.
+    </p>
+  </description>
+  <url type="homepage">https://github.com/validity-rs/validity-rs</url>
+  <developer id="io.github.validity_rs">
+    <name>validity-rs contributors</name>
+  </developer>
+  <provides>
+    <modalias>usb:v06CBp009Ad*</modalias>
+  </provides>
+</component>
