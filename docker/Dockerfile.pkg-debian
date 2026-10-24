@@ -7,8 +7,8 @@
 #           with (fprintd, polkitd, the D-Bus system bus), preinstalled so that
 #           the cycle can check that removing the package leaves the system as
 #           it found it. The package itself is installed by the cycle.
-#   apt-client  a clean trixie with systemd as PID 1 and nothing else: the
-#           APT test installs everything from the repositories.
+#   apt-client  a clean trixie with systemd as PID 1 and its system bus, nothing
+#           else: the APT test installs everything from the repositories.
 #
 # Images pinned by digest; Renovate proposes the bumps.
 
@@ -62,8 +62,10 @@ CMD ["/bin/sh", "-c", "mount -o remount,rw /sys/fs/cgroup && exec /usr/lib/syste
 
 FROM debian:trixie@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308 AS apt-client
 
+# The system bus too: on a real machine it runs from boot, and a bus installed
+# after boot (as a dependency) is not started by its package.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends systemd systemd-sysv \
+    && apt-get install -y --no-install-recommends dbus systemd systemd-sysv \
     && rm -rf /var/lib/apt/lists/*
 
 # As in the test stage: maintainer scripts run their service actions.

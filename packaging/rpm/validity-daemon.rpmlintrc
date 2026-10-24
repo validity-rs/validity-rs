@@ -1,0 +1,4 @@
+# rpmlint: findings reviewed and accepted, each with its reason.
+# Proper names, not misspellings: the fprintd project, its library and its
+# D-Bus name, and the "pam" of fprintd-pam.
+addFilter(r"spelling-error \(['\"](fprintd|libfprint|Fprint|pam)['\"]")

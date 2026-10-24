@@ -29,5 +29,6 @@ rpm -qip "$out"/validity-daemon-"$version"-*.x86_64.rpm
 rpm -qlvp "$out"/validity-daemon-"$version"-*.x86_64.rpm
 rpm -qp --requires --provides --conflicts --scripts "$out"/validity-daemon-"$version"-*.x86_64.rpm
 # rpmlint: errors fail; warnings are shown (Fedora's own packages carry some).
-rpmlint "$top/SPECS/validity-daemon.spec" "$out"/*.rpm
+tar -xzOf "$tarball" "$name/packaging/rpm/validity-daemon.rpmlintrc" >"$top/validity-daemon.rpmlintrc"
+rpmlint --rpmlintrc "$top/validity-daemon.rpmlintrc" "$top/SPECS/validity-daemon.spec" "$out"/*.rpm
 echo "rpmlint: no errors"

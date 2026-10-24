@@ -11,13 +11,13 @@
 Name:           validity-daemon
 Version:        0.1.0
 Release:        1%{?dist}
-Summary:        fprintd-compatible service for Synaptics/Validity match-on-chip fingerprint sensors
+Summary:        Fingerprint service for Synaptics/Validity match-on-chip sensors
 
 # validity-rs is MIT. Statically linked crates: MIT, MIT OR Apache-2.0,
 # Apache-2.0, BSD-3-Clause (subtle); see deny.toml.
 License:        MIT AND Apache-2.0 AND BSD-3-Clause
 URL:            https://github.com/validity-rs/validity-rs
-Source0:        validity-rs-%{version}.tar.gz
+Source0:        %{url}/releases/download/v%{version}/validity-rs-%{version}.tar.gz
 
 ExclusiveArch:  x86_64 aarch64
 BuildRequires:  cargo >= 1.99
@@ -35,8 +35,8 @@ Conflicts:      python3-validity
 validity-daemon serves fprintd's D-Bus API (net.reactivated.Fprint) for the
 Synaptics/Validity match-on-chip fingerprint sensors that libfprint does not
 support (06cb:009a: ThinkPad T480, T480s, X280, X1 Carbon 6th gen).
-fprintd-pam, fprintd's tools and desktops keep working unchanged. PAM is not
-configured by this package. The Synaptics vendor files, which may not be
+fprintd-pam, the tools of fprintd and desktops keep working unchanged. PAM is
+not configured by this package. The Synaptics vendor files, which may not be
 redistributed, are downloaded on installation by validity-vendor and checked
 by SHA-256.
 
@@ -44,6 +44,8 @@ by SHA-256.
 %autosetup -n validity-rs-%{version}
 
 %build
+# Stripped by cargo: there is no debuginfo subpackage to move symbols to.
+export CARGO_PROFILE_RELEASE_STRIP=symbols
 cargo build --release --offline --locked -p validity-daemon -p validity-vendor
 
 %install

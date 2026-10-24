@@ -24,13 +24,18 @@ mkdir -p "$out"
 # For the AUR: the published tarball, pinned.
 sed "s|^sha256sums=.*|sha256sums=('$sum')|" "$work/PKGBUILD" >"$out/PKGBUILD"
 cp "$work/validity-daemon.install" "$out/"
+# The AUR also wants .SRCINFO, generated from that PKGBUILD.
+chown -R builder: "$out" "$work"
+runuser -u builder -- sh -c "cd '$out' && makepkg --printsrcinfo >.SRCINFO"
 # Here: the same tarball, from disk.
 cp "$tarball" "$work/"
 sed -i -e "s|^source=.*|source=(\"validity-rs-\$pkgver.tar.gz\")|" \
     -e "s|^sha256sums=.*|sha256sums=('$sum')|" "$work/PKGBUILD"
 chown -R builder: "$work"
-runuser -u builder -- env SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-}" \
-    PKGDEST="$work/out" sh -c "cd '$work' && makepkg --nodeps --noconfirm --cleanbuild"
+# Only what is set: cargo rejects an empty CARGO_BUILD_JOBS.
+vars=(SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" PKGDEST="$work/out")
+[ -n "${CARGO_BUILD_JOBS:-}" ] && vars+=(CARGO_BUILD_JOBS="$CARGO_BUILD_JOBS")
+runuser -u builder -- env "${vars[@]}" sh -c "cd '$work' && makepkg --nodeps --noconfirm --cleanbuild"
 cp "$work"/out/validity-daemon-"$version"-*-x86_64.pkg.tar.zst "$out/"
 pkg=$(ls "$out"/validity-daemon-"$version"-*-x86_64.pkg.tar.zst)
 pacman -Qip "$pkg"

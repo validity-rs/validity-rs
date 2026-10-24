@@ -26,12 +26,14 @@ grep -qE "^pkgver=$version\$" "$work/APKBUILD" || {
 # abuild looks before downloading.
 cp "$tarball" "$work/"
 chown -R builder: /home/builder
-as_builder() {
-    runuser -u builder -- env HOME=/home/builder PATH="$PATH" \
-        RUSTUP_HOME="${RUSTUP_HOME:-}" CARGO_HOME=/home/builder/.cargo \
-        SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-}" \
-        SRCDEST="$work" REPODEST=/home/builder/packages sh -c "cd '$work' && $*"
-}
+# Alpine has no runuser; su from root asks no password. Only what is set is
+# passed (cargo rejects an empty CARGO_BUILD_JOBS). CARGO_HOME must be
+# writable by the builder; the toolchain itself (RUSTUP_HOME) is only read.
+vars="HOME=/home/builder PATH=$PATH CARGO_HOME=/home/builder/.cargo"
+vars="$vars SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH SRCDEST=$work REPODEST=/home/builder/packages"
+[ -n "${RUSTUP_HOME:-}" ] && vars="$vars RUSTUP_HOME=$RUSTUP_HOME"
+[ -n "${CARGO_BUILD_JOBS:-}" ] && vars="$vars CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"
+as_builder() { su builder -s /bin/sh -c "cd '$work' && env $vars $*"; }
 as_builder abuild-keygen -a -n -q
 as_builder abuild checksum
 as_builder abuild -d
