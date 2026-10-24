@@ -48,6 +48,14 @@ wildcards = "deny"
 # Workspace members may depend on each other by path without a version.
 allow-wildcard-paths = true
 highlight = "all"
+# Reviewed duplicates. Each names the crate that pulls the second version and
+# goes when that crate catches up (Renovate proposes the bump).
+skip = [
+    # syn 2 next to syn 3: zerocopy-derive (via inno, validity-vendor's Inno
+    # Setup reader) has no syn 3 release yet (latest 0.8.63, 2026-10-13). A
+    # proc-macro dependency: compile time only, nothing of it is shipped.
+    { crate = "syn@2", reason = "zerocopy-derive 0.8 still depends on syn 2" },
+]
 
 [sources]
 # Only crates.io. A git or alternative-registry dependency is a supply-chain

@@ -60,6 +60,9 @@ crates/validity-proto    the protocol: USB transport (nusb, optional `usb` featu
                          on-chip database, enrolment, identification
 crates/validity-daemon   net.reactivated.Fprint D-Bus service (zbus), polkit, logind
                          suspend handling, recovery
+crates/validity-vendor   installs the Synaptics vendor files from Lenovo's package
+                         (download, SHA-256 checks, Inno Setup extraction, atomic
+                         switch into /var/lib/validity/vendor)
 packaging/common         systemd unit, D-Bus activation file and bus policy
 fuzz/                    cargo-fuzz targets for every parser and the handshake
 tools/oracle/            python-validity scripts that generate the test vectors

@@ -1,0 +1,23 @@
+[package]
+name = "validity-vendor"
+description = "Installs the Synaptics vendor files (driver DLL, firmware extension) that validity-daemon needs, from Lenovo's driver package, checked by SHA-256"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Inno Setup reader (Lenovo's package is an Inno Setup 5.5.7 installer). Only the
+# `extract` feature: no date crates. It checks each file's recorded checksum.
+inno = { version = "0.7.1", default-features = false, features = ["extract"] }
+sha2 = "0.11.1"
+
+[dev-dependencies]
+# Only to check that the hashes here and the ones the protocol checks agree.
+validity-proto = { path = "../validity-proto", version = "0.1.0", default-features = false }
+crc32fast = "1.5.3"
+sha1 = "0.11.0"
+
+[lints]
+workspace = true
