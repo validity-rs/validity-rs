@@ -103,7 +103,7 @@ Details, other distributions and the CI cycle: [docs/packaging.md](docs/packagin
 ## Building and testing
 
 Requirements: Rust 1.99 or later (edition 2024). For the daemon's integration tests you
-also need `dbus-daemon`. No C libraries are needed: the USB transport is pure Rust.
+also need `dbus-daemon`, and `curl` for validity-vendor's (it downloads with curl). No C libraries are needed: the USB transport is pure Rust.
 
 ```bash
 cargo build

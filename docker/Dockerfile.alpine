@@ -8,11 +8,14 @@
 FROM rust:1.99.1-alpine3.24@sha256:b1d5dd5a22a09404d3e798c0cf051b689077360374eb505fa5bb93c479693d87
 
 # dbus: dbus-daemon, for the private bus of the daemon's integration tests.
+# curl: validity-vendor downloads with it (its tests use a local HTTP mirror).
 RUN apk add --no-cache \
+        curl \
         dbus \
         musl-dev \
     && rustc --version \
-    && dbus-daemon --version | head -1
+    && dbus-daemon --version | head -1 \
+    && curl --version | head -1
 
 WORKDIR /workspace
 CMD ["/bin/sh"]
