@@ -2,9 +2,10 @@
 //! which wins.
 //!
 //! ```toml
-//! # Synaptics driver DLL from the vendor package, installed by the setup tool
-//! # (checked against its SHA-256 at start; the daemon never downloads anything).
-//! vendor_dll = "/var/lib/validity/synaWudfBioUsb.dll"
+//! # Synaptics driver DLL from the vendor package, installed by `validity-vendor
+//! # install` (checked against its SHA-256 at start; the daemon never downloads
+//! # anything). Default: <state_dir>/vendor/synaWudfBioUsb.dll.
+//! vendor_dll = "/var/lib/validity/vendor/synaWudfBioUsb.dll"
 //! # Calibration and other state.
 //! state_dir = "/var/lib/validity"
 //! # error, warn, info or debug.
@@ -35,6 +36,8 @@ use validity_proto::sid::Sid;
 pub const DEFAULT_CONFIG: &str = "/etc/validity/validity.toml";
 pub const DEFAULT_STATE_DIR: &str = "/var/lib/validity";
 pub const DLL_NAME: &str = "synaWudfBioUsb.dll";
+/// Where `validity-vendor` installs the vendor files, inside the state directory.
+pub const VENDOR_SUBDIR: &str = "vendor";
 pub const CALIBRATION_FILE: &str = "calibration.bin";
 
 #[derive(Debug, Default, Deserialize)]
@@ -67,6 +70,9 @@ pub struct Config {
     pub finger_timeout: Duration,
     pub sid_overrides: BTreeMap<String, Sid>,
     pub bus: Bus,
+    /// Serve an emulated sensor instead of the USB one (`--fake-sensor`, hidden:
+    /// for the package tests, which have no sensor).
+    pub fake_sensor: bool,
 }
 
 impl Config {
@@ -129,6 +135,7 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
     let mut lvl = None;
     let mut trace = false;
     let mut bus = Bus::System;
+    let mut fake_sensor = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = |name: &str| {
@@ -146,6 +153,8 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
             "--trace-sensor-traffic" => trace = true,
             "--session" => bus = Bus::Session,
             "--address" => bus = Bus::Address(value("--address")?),
+            // Not in USAGE: tests only (docs/packaging.md).
+            "--fake-sensor" => fake_sensor = true,
             other => return Err(format!("unknown argument {other:?}\n\n{USAGE}")),
         }
     }
@@ -168,7 +177,7 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_STATE_DIR));
     let vendor_dll = dll
         .or(file.vendor_dll)
-        .unwrap_or_else(|| state_dir.join(DLL_NAME));
+        .unwrap_or_else(|| state_dir.join(VENDOR_SUBDIR).join(DLL_NAME));
     let log_level = match (trace, lvl) {
         (true, _) => LevelFilter::Trace,
         (false, Some(l)) => l,
@@ -192,6 +201,7 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
             .map_or(Deadlines::DEFAULT.finger, Duration::from_millis),
         sid_overrides,
         bus,
+        fake_sensor,
     }))
 }
 
@@ -283,8 +293,22 @@ alice = "S-1-5-21-7-8-9-500"
         assert_eq!(c.state_dir, Path::new(DEFAULT_STATE_DIR));
         assert_eq!(
             c.vendor_dll,
-            Path::new("/var/lib/validity/synaWudfBioUsb.dll")
+            Path::new("/var/lib/validity/vendor/synaWudfBioUsb.dll")
         );
+        assert!(!c.fake_sensor);
+        let Cli::Run(fake) = parse(&args(&[
+            "--config",
+            empty.to_str().unwrap(),
+            "--fake-sensor",
+            "--state-dir",
+            "/s",
+        ]))
+        .unwrap() else {
+            panic!()
+        };
+        assert!(fake.fake_sensor);
+        assert_eq!(fake.vendor_dll, Path::new("/s/vendor/synaWudfBioUsb.dll"));
+        assert!(!USAGE.contains("fake"));
         assert_eq!(c.log_level, LevelFilter::Info);
         assert_eq!(c.ready_timeout, Duration::from_secs(3));
         assert_eq!(c.finger_timeout, Deadlines::DEFAULT.finger);

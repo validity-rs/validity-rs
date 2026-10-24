@@ -36,7 +36,7 @@ pub fn host_keys(dmi: &Path) -> Result<PskKeys, String> {
 pub fn load_blobs(path: &Path) -> Result<Blobs, String> {
     let dll = std::fs::read(path).map_err(|e| {
         format!(
-            "vendor driver DLL {} not readable ({e}): install it with the setup tool",
+            "vendor driver DLL {} not readable ({e}): install it with `validity-vendor install` (as root)",
             path.display()
         )
     })?;

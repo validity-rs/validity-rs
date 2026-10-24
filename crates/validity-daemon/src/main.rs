@@ -3,9 +3,11 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use validity_daemon::config::{self, Cli};
+use validity_daemon::config::{self, Cli, Config};
+use validity_daemon::fake::{self, FakeSensor};
 use validity_daemon::logging;
 use validity_daemon::polkit::Polkit;
+use validity_daemon::sensor::Hardware;
 use validity_daemon::service::{self, Deps, Options, Setup};
 use validity_daemon::usb::{UsbHardware, host_keys, load_blobs};
 use validity_daemon::users::{SidMap, SystemUsers};
@@ -33,6 +35,16 @@ fn main() -> ExitCode {
     if let Err(e) = std::fs::create_dir_all(&config.state_dir) {
         log::warn!("state directory {}: {e}", config.state_dir.display());
     }
+    if config.fake_sensor {
+        // The package tests' smoke run: everything but the sensor is real.
+        log::warn!("--fake-sensor: serving an emulated sensor, for tests only");
+        let fake = FakeSensor::new();
+        let setup = Setup {
+            blobs: Ok(fake::blobs()),
+            calibration: config.calibration_path(),
+        };
+        return serve(&config, fake.hardware(), setup);
+    }
     let blobs = load_blobs(&config.vendor_dll);
     if let Err(e) = &blobs {
         log::warn!("{e}");
@@ -48,6 +60,11 @@ fn main() -> ExitCode {
         blobs,
         calibration: config.calibration_path(),
     };
+    serve(&config, hw, setup)
+}
+
+/// Serves the D-Bus API over `hw` until SIGTERM or SIGINT.
+fn serve<H: Hardware>(config: &Config, hw: H, setup: Setup) -> ExitCode {
     let deps = Deps {
         authority: Arc::new(Polkit),
         users: Arc::new(SystemUsers),
@@ -58,7 +75,7 @@ fn main() -> ExitCode {
         ..Options::default()
     };
     match zbus::block_on(service::run(
-        config.bus,
+        config.bus.clone(),
         hw,
         setup,
         deps,
