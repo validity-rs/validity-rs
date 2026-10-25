@@ -139,7 +139,8 @@ FPRINTD_EXEC='Exec=/usr/lib(exec)?/fprintd'
 expect "$FPRINTD_EXEC" cat "$FPRINT_SERVICE"
 before=$(mktemp)
 snapshot >"$before"
-cp /etc/pam.d/common-auth /tmp/common-auth.before
+# Debian only: pam-auth-update and its common-* files.
+if [ "$distro" = debian ]; then cp /etc/pam.d/common-auth /tmp/common-auth.before; fi
 
 say "install $(basename "$pkg") (Lenovo's server unreachable on purpose)"
 offline
