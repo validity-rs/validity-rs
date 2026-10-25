@@ -5,6 +5,8 @@
 [![Release](https://img.shields.io/github/v/release/validity-rs/validity-rs)](https://github.com/validity-rs/validity-rs/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+**[Website](https://validity-rs.github.io/)** · [Driver and service](https://github.com/validity-rs/validity-rs) · [Fingerprints app](https://github.com/validity-rs/fingerprint-settings) · [APT repository](https://validity-rs.github.io/apt/) · [Tool reference](https://validity-rs.github.io/docs.html)
+
 validity-rs is a Linux driver, written in Rust, for the Synaptics/Validity
 "match-on-chip" fingerprint sensors found in ThinkPads of the 2018 generation,
 which libfprint does not support. It ships as `validity-daemon`, a drop-in

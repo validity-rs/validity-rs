@@ -1,5 +1,7 @@
 # validity-rs APT repository
 
+**[Website](https://validity-rs.github.io/)** · [Driver and service](https://github.com/validity-rs/validity-rs) · [Fingerprints app](https://github.com/validity-rs/fingerprint-settings) · [APT repository](https://validity-rs.github.io/apt/) · [Tool reference](https://validity-rs.github.io/docs.html)
+
 The signed APT repository of [validity-rs](https://github.com/validity-rs/validity-rs),
 the Linux driver for Synaptics/Validity `06cb:009a` match-on-chip fingerprint
 sensors, served at **https://validity-rs.github.io/apt**.
