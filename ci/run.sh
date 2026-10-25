@@ -2,7 +2,7 @@
 # The CI, runnable locally. GitHub Actions calls the same jobs, so a green local
 # run means a green CI run.
 #
-#   ci/run.sh                 # quick: noai gitleaks fmt clippy test doc
+#   ci/run.sh                 # quick: noai zizmor gitleaks fmt clippy test doc nousb
 #   ci/run.sh all             # quick + msrv deny distro e2e fuzz mutants-diff (needs docker)
 #   ci/run.sh clippy distro   # selected jobs
 #   ci/run.sh distro:fedora   # one distro

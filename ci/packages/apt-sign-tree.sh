@@ -3,7 +3,8 @@
 # in the Debian build image without network: imports the signing subkey from
 # APT_SIGNING_KEY (an armored export holding only the subkey, see
 # docs/packaging.md) into a throwaway GnuPG home, checks it belongs to the
-# published key, and writes the tree from every .deb in <debs dir>.
+# published key, and writes the tree from every .deb in <debs dir>, with
+# .nojekyll and packaging/apt/README.md.
 #   apt-sign-tree.sh <debs dir> <tree>
 set -euo pipefail
 
@@ -27,5 +28,7 @@ echo "signing with subkey $sub of $primary"
 mapfile -t files < <(find "$debs" -name '*.deb' | LC_ALL=C sort)
 [ ${#files[@]} -gt 0 ] || { echo "no .deb in $debs" >&2; exit 1; }
 /ci/apt-repo.sh "$tree" "$sub!" "$pub" "${files[@]}"
-# GitHub Pages: serve the tree as it is (no Jekyll).
+# GitHub Pages: serve the tree as it is (no Jekyll). The publication replaces
+# the whole gh-pages tree, so the repository's README comes from here too.
 touch "$tree/.nojekyll"
+install -m 0644 "${PACKAGING:-/packaging}/apt/README.md" "$tree/README.md"

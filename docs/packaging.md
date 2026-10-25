@@ -1,5 +1,11 @@
 # Packaging
 
+The packager's and maintainer's reference: how every package is built and
+tested, what it installs, the APT repository, its key, and the release
+workflow. It describes `master`; the Ubuntu suites and the `validity-fprint`
+PAM profile are not in 0.1.0 and ship with the next release. Users want the
+[README](../README.md); contributors the [development guide](development.md).
+
 Every package is built from one vendored source tarball, in a pinned container
 of its distribution, without network. It is then installed, smoke-tested and
 removed in a fresh container of the same distribution. `ci/packages/run.sh` does
@@ -406,7 +412,13 @@ pool/<suite>/main/f/fingerprint-settings/...    (not in noble, see Ubuntu)
 validity-rs-archive-keyring.gpg                 the public key (bootstrap)
 validity-rs-<suite>.sources                     the suite's APT source (bootstrap)
 validity-rs.sources                             trixie's, as first published
+README.md                                       packaging/apt/README.md
+.nojekyll                                       served as it is, no Jekyll
 ```
+
+As of 0.1.0 the published tree holds `trixie` only, with
+`validity-rs.sources` and no per-suite file and no README: the per-suite
+files, the Ubuntu suites and the README come with the next release.
 
 `ci/packages/apt-repo.sh` writes the tree from a set of .deb files (it is a
 function of them: each publication rebuilds it) with `apt-ftparchive`, puts
@@ -414,7 +426,10 @@ each .deb in the suite its version suffix names (none: `trixie`;
 `.ubuntu24.04`: `noble`; `.ubuntu26.04`: `resolute`; any other Ubuntu suffix
 fails), requires validity-daemon and the keyring package in every suite it
 writes, signs each suite's `InRelease` and `Release.gpg`, and checks both
-signatures against the public key users get. Release fields: `Origin:
+signatures against the public key users get. `ci/packages/apt-sign-tree.sh`,
+which signs the published tree, adds `.nojekyll` and the repository's
+README, `packaging/apt/README.md`: the publication replaces the whole
+`gh-pages` tree, so the README lives here. Release fields: `Origin:
 validity-rs`, `Label: validity-rs`, `Suite` and `Codename` the suite,
 `Components: main`, `Architectures: amd64`.
 
@@ -573,7 +588,9 @@ published.
 5. **A draft GitHub release** with all files. A maintainer reviews it and
    publishes it.
 6. Publication jobs, each off until its repository variable is `1`:
-   `CRATES_IO_PUBLISH`, `APT_PUBLISH`, `COPR_PUBLISH`, `AUR_PUBLISH`.
+   `CRATES_IO_PUBLISH`, `APT_PUBLISH`, `COPR_PUBLISH`, `AUR_PUBLISH`. Only
+   `APT_PUBLISH` is set today. The `apt` job runs as soon as the draft
+   exists, without waiting for the maintainer to publish it.
 
 Files of a release: `validity-rs-<v>.tar.gz` (the vendored sources),
 `validity-daemon_<v>-1_amd64.deb` and its Ubuntu builds
@@ -630,10 +647,10 @@ never forced) with that repository's deploy key. Setting it up, once:
 
 ```bash
 # The repository, with a gh-pages branch.
-gh repo create validity-rs/apt --public --description 'APT repository of validity-rs (Debian 13)'
+gh repo create validity-rs/apt --public --description 'APT repository of validity-rs'
 d=$(mktemp -d) && cd "$d" && git init -q -b gh-pages
-echo 'validity-rs APT repository: https://github.com/validity-rs/validity-rs/blob/master/docs/packaging.md' >README.md
-touch .nojekyll && git add . && git commit -qm 'APT repository'
+cp <validity-rs>/packaging/apt/README.md . && touch .nojekyll
+git add . && git commit -qm 'APT repository'
 git remote add origin git@github.com:validity-rs/apt.git && git push -u origin gh-pages
 # Pages from gh-pages.
 gh api -X POST repos/validity-rs/apt/pages -f 'source[branch]=gh-pages' -f 'source[path]=/'
@@ -654,10 +671,15 @@ shred -u apt_deploy APT_SIGNING_KEY.asc
 gh variable set APT_PUBLISH --body 1 -R validity-rs/validity-rs
 ```
 
-The next tag then publishes. Check it from any trixie machine with the
+The next tag then publishes. Check it from a machine of each suite with the
 bootstrap above.
 
 ### COPR and the AUR
+
+Neither is set up yet: the COPR project is pending, and AUR account
+registration is closed at the moment. Until then the .rpm and the Arch
+package are only on the GitHub release (the release also carries the AUR
+files, `validity-daemon-<v>-aur.tar.gz`).
 
 COPR: a COPR project `validity-rs/validity-daemon` (Fedora account), its
 `copr-cli` configuration as secret `COPR_CONFIG` of a `copr` environment, and

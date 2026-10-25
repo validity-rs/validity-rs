@@ -1,6 +1,6 @@
 [package]
 name = "pam-validity"
-description = "PAM module for fingerprint login through net.reactivated.Fprint (validity-daemon or fprintd), with its messages in the session's language"
+description = "PAM module for fingerprint login through net.reactivated.Fprint (validity-daemon or fprintd), with no prompt"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

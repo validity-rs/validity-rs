@@ -14,7 +14,8 @@ stop. A port cannot do better than a working reference.
   Windows) is lost. This is expected on a Linux-only machine.
 - Keep a **password login path** at all times. Do not touch PAM during phase 0.
 - Captured sessions contain the sensor serial number, pairing keys and TLS session
-  keys. **Store them outside this repository** (see README, *Privacy*).
+  keys. **Store them outside this repository** (see
+  [Privacy](development.md#privacy)).
 
 ## Steps
 
@@ -78,7 +79,8 @@ Observed on hardware:
   It then returns at a new USB address.
 - Every interrupt the sensor owes came quickly: at most 6 ms for the scan to be
   armed, 856 ms for a capture, 829 ms for a match and 431 ms for an enrolment step.
-  These delays set validity-rs's deadlines (README, *Waits and timeouts*). Only the
+  These delays set validity-rs's deadlines
+  ([Waits and timeouts](development.md#waits-and-timeouts)). Only the
   finger wait is long, and it depends on the user.
 
 The same session (pairing from an erased sensor, enrolment, identification) was then
