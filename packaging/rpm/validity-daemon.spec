@@ -9,7 +9,7 @@
 %global debug_package %{nil}
 
 Name:           validity-daemon
-Version:        0.1.0
+Version:        0.1.1
 Release:        1%{?dist}
 Summary:        Fingerprint service for Synaptics/Validity match-on-chip sensors
 
@@ -100,5 +100,8 @@ fi
 %{_metainfodir}/io.github.validity_rs.validity_daemon.metainfo.xml
 
 %changelog
+* Sun Oct 25 2026 validity-rs maintainers <409744+pierre-warnier@users.noreply.github.com> - 0.1.1-1
+- Our own PAM module (pam_validity.so) with a password-first LightDM profile, a plain device name, Ubuntu 24.04 and 26.04 suites.
+
 * Sat Oct 24 2026 validity-rs maintainers <409744+pierre-warnier@users.noreply.github.com> - 0.1.0-1
 - First package.

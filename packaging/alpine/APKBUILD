@@ -7,7 +7,7 @@
 # with the official Rust toolchain for Alpine instead (abuild -d).
 # Maintainer: validity-rs maintainers <409744+pierre-warnier@users.noreply.github.com>
 pkgname=validity-daemon
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=0
 pkgdesc="fprintd-compatible service for Synaptics/Validity match-on-chip fingerprint sensors"
 url="https://github.com/validity-rs/validity-rs"

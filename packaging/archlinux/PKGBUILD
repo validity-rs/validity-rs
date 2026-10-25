@@ -7,7 +7,7 @@
 # The release workflow fills in sha256sums for the published tarball.
 
 pkgname=validity-daemon
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc='fprintd-compatible service for Synaptics/Validity match-on-chip fingerprint sensors'
 arch=('x86_64')
