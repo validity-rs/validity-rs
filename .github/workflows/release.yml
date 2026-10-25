@@ -77,7 +77,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        job: [debian, fedora, archlinux, alpine, repro, keyring]
+        job: [debian, ubuntu-noble, ubuntu-resolute, fedora, archlinux, alpine, repro, repro-noble, repro-resolute, keyring]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -98,7 +98,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           case "$JOB" in
-            debian) cp target/packages/debian/*.deb dist/ ;;
+            debian | ubuntu-*) cp "target/packages/$JOB"/*.deb dist/ ;;
             fedora) cp target/packages/fedora/*.rpm dist/ ;;
             archlinux)
               cp target/packages/archlinux/validity-daemon-[0-9]*.pkg.tar.zst dist/
@@ -107,7 +107,7 @@ jobs:
               cp target/packages/alpine/*.apk dist/
               mkdir -p dist/aports && cp target/packages/alpine/APKBUILD dist/aports/ ;;
             keyring) cp target/packages/keyring/*.deb dist/ ;;
-            repro) ;;
+            repro*) ;;
           esac
           ls -lR dist
         env:
@@ -287,7 +287,8 @@ jobs:
   apt:
     # Off until vars.APT_PUBLISH is "1". Rebuilds the repository tree from this
     # release's .deb files (and fingerprint-settings' latest release, if any),
-    # signs it, and commits it to the gh-pages branch of validity-rs/apt with
+    # one suite per distribution release, each .deb in the suite its version
+    # suffix names (ci/packages/suites.sh), signs it, and commits it to the gh-pages branch of validity-rs/apt with
     # that repository's deploy key (secret APT_DEPLOY_KEY, write access to that
     # repository only), in the "apt" environment.
     name: Publish the APT repository

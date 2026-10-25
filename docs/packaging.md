@@ -9,11 +9,16 @@ all of it, locally and in GitHub Actions (`.github/workflows/packages.yml`).
 ci/packages/run.sh                 # every job below
 ci/packages/run.sh source          # the vendored source tarball
 ci/packages/run.sh debian          # build, lintian, install/smoke/remove cycle
+ci/packages/run.sh ubuntu-noble    # the same .deb built and cycled in Ubuntu 24.04
+ci/packages/run.sh ubuntu-resolute # ... and in Ubuntu 26.04
 ci/packages/run.sh fedora          # the same with rpmbuild/rpmlint
 ci/packages/run.sh archlinux       # makepkg/namcap
 ci/packages/run.sh alpine          # abuild/apkbuild-lint, OpenRC
 ci/packages/run.sh repro           # build the .deb twice and compare
+ci/packages/run.sh repro-noble     # the same for an Ubuntu suite (repro-resolute)
 ci/packages/run.sh apt             # APT repository: install, then unattended upgrade
+ci/packages/run.sh apt-noble       # the same on Ubuntu (apt-resolute)
+ci/packages/run.sh keyring         # the keyring packages, real key, one per suite
 PKG_CPUS=16-19 ci/packages/run.sh debian   # keep the containers on some CPUs
 VENDOR_ONLINE=1 ci/packages/run.sh debian  # the cycle also downloads Lenovo's package
 ```
@@ -27,10 +32,10 @@ Output goes to `target/packages/`.
 | `/usr/libexec/validity-daemon` | the service |
 | `/usr/sbin/validity-vendor` | the vendor file installer (man page `validity-vendor(8)`) |
 | `/usr/lib/systemd/system/validity-daemon.service` | hardened unit, `Type=dbus` |
-| `/usr/share/dbus-1/system-services/net.reactivated.Fprint.service` | D-Bus activation (Debian: diverted, see below) |
+| `/usr/share/dbus-1/system-services/net.reactivated.Fprint.service` | D-Bus activation (Debian, Ubuntu: diverted, see below) |
 | `/usr/share/dbus-1/system.d/validity-daemon.conf` | bus policy (the same grants as fprintd's) |
 | `/usr/lib/udev/rules.d/60-validity-daemon.rules` | starts the unit when a supported sensor appears |
-| `/usr/share/pam-configs/validity-fprint` | Debian only: optional PAM profile, off by default (see below) |
+| `/usr/share/pam-configs/validity-fprint` | Debian and Ubuntu only: optional PAM profile, off by default (see below) |
 | `/usr/share/metainfo/io.github.validity_rs.validity_daemon.metainfo.xml` | AppStream: the USB IDs it drives |
 | `/usr/share/doc/validity-daemon/validity.toml.example` | every setting, with its default |
 | `/var/lib/validity/` | state: calibration, `vendor/` (created at run time) |
@@ -45,7 +50,7 @@ is only suggested. Enabling it is the administrator's choice, and it must stay
 
 ### Debian: the `validity-fprint` PAM profile
 
-The .deb ships `/usr/share/pam-configs/validity-fprint`
+The .deb (Debian's and Ubuntu's builds alike) ships `/usr/share/pam-configs/validity-fprint`
 (`packaging/debian/pam-configs/`), a pam-auth-update profile that is never
 enabled by the package (`Default: no`, no `pam-auth-update` call in `postinst`).
 It takes the place of libpam-fprintd's `fprintd` profile (same `Priority: 260`,
@@ -177,7 +182,8 @@ transport.
 
 ## Debian (reference target)
 
-Built with cargo-deb 3.8.0 (metadata in `crates/validity-daemon/Cargo.toml`,
+Ubuntu gets the same package, built in each Ubuntu release (see
+[Ubuntu](#ubuntu)). Built with cargo-deb 3.8.0 (metadata in `crates/validity-daemon/Cargo.toml`,
 maintainer scripts in `packaging/debian/`) in `docker/Dockerfile.pkg-debian`
 (`build` stage: the pinned Rust 1.99.1 trixie image of the CI, lintian 2.122.0).
 cargo-deb writes no `md5sums`; `ci/packages/build-deb.sh` adds them the way
@@ -243,6 +249,48 @@ daemon logs that it has no sleep inhibitor and carries on.
 `SOURCE_DATE_EPOCH` (the commit time) fixes every timestamp: the tarball, the
 files in the package and the archive members. `ci/packages/run.sh repro` builds
 the .deb twice from the same tarball and compares the files.
+
+## Ubuntu
+
+The Debian package, unchanged (metadata, maintainer scripts, diversion,
+`validity-fprint` profile), built in each Ubuntu release still in standard
+support, so that it links that release's glibc: one APT suite per release.
+Checked on 2026-10-25 against `changelogs.ubuntu.com/meta-release` and
+Launchpad:
+
+| Suite | Release | glibc | fprintd | polkitd | systemd | lintian |
+|---|---|---|---|---|---|---|
+| `noble` | 24.04 LTS | 2.39 | 1.94.3 | 124 | 255.4 | 2.117.0ubuntu1.5 |
+| `resolute` | 26.04 LTS | 2.43 | 1.94.5 | 127 | 259.9 | 2.129.0ubuntu2.1 |
+
+22.04 (jammy) is still supported by Canonical, but is not a suite of this
+repository. fprintd's activation file, its `/usr/libexec/fprintd`, its polkit
+actions, libpam-fprintd's `fprintd` pam-auth-update profile and the D-Bus
+search order are the same as Debian's, so the package and its cycle apply as
+they are.
+
+`docker/Dockerfile.pkg-ubuntu`, one file for every Ubuntu suite
+(`--build-arg SUITE=<codename>`), with the stages of the Debian one: `build`
+takes the Rust toolchain from the CI's pinned `rust:1.99.1-trixie` image
+(rustup's official builds need only glibc 2.17) and builds cargo-deb in the
+release; `test` and `apt-client` are that release with systemd as PID 1. The
+.deb of a suite has its Debian revision suffixed with the release,
+`validity-daemon_<v>-1.ubuntu24.04_amd64.deb`: the files of every suite share
+one GitHub release (which would rename a `~` or `+`), the repository files
+each .deb in the suite its suffix names, and the newer release sorts higher.
+`ci/packages/suites.sh` is the one list of suites and suffixes, which
+fingerprint-settings follows too.
+
+`ci/packages/run.sh ubuntu-<suite>` runs the Debian cycle above in that
+release (lintian clean with the release's lintian, then install, smoke test,
+D-Bus activation, purge, nothing left behind); `repro-<suite>` and
+`apt-<suite>` are the reproducibility and APT tests there. The Ubuntu images
+install no documentation (`/etc/dpkg/dpkg.cfg.d/excludes`), so the cycle
+starts the daemon without the example configuration there.
+
+**fingerprint-settings is not built for `noble`**: it needs GTK 4.18 and
+libadwaita 1.7 (Debian 13's), and noble has GTK 4.14 and libadwaita 1.5.
+Its `resolute` build (GTK 4.22, libadwaita 1.9) is in that suite.
 
 ## Fedora
 
@@ -323,55 +371,81 @@ activation back. No udev rule is shipped (it only starts a systemd unit).
 
 ## APT repository
 
-The repository Debian users install from, and through which unattended-upgrades
-keeps validity-daemon current. It is published as a static tree on GitHub
-Pages, from the `gh-pages` branch of `validity-rs/apt`, at
-`https://validity-rs.github.io/apt`:
+The repository Debian and Ubuntu users install from, and through which
+unattended-upgrades keeps validity-daemon current. It is published as a static
+tree on GitHub Pages, from the `gh-pages` branch of `validity-rs/apt`, at
+`https://validity-rs.github.io/apt`. One suite per release
+(`ci/packages/suites.sh`): `trixie` (Debian 13), `noble` (Ubuntu 24.04 LTS),
+`resolute` (Ubuntu 26.04 LTS).
 
 ```
-dists/trixie/{InRelease,Release,Release.gpg}    signed (ed25519 subkey, SHA-512)
-dists/trixie/main/binary-amd64/Packages{,.gz,.xz}
-pool/main/v/validity-daemon/validity-daemon_<version>_amd64.deb
-pool/main/v/validity-rs-archive-keyring/validity-rs-archive-keyring_<version>_all.deb
+dists/<suite>/{InRelease,Release,Release.gpg}   signed (ed25519 subkey, SHA-512)
+dists/<suite>/main/binary-amd64/Packages{,.gz,.xz}
+pool/<suite>/main/v/validity-daemon/validity-daemon_<version>_amd64.deb
+pool/<suite>/main/v/validity-rs-archive-keyring/validity-rs-archive-keyring_<version>_all.deb
+pool/<suite>/main/f/fingerprint-settings/...    (not in noble, see Ubuntu)
 validity-rs-archive-keyring.gpg                 the public key (bootstrap)
-validity-rs.sources                             the APT source (bootstrap)
+validity-rs-<suite>.sources                     the suite's APT source (bootstrap)
+validity-rs.sources                             trixie's, as first published
 ```
 
 `ci/packages/apt-repo.sh` writes the tree from a set of .deb files (it is a
-function of them: each publication rebuilds it) with `apt-ftparchive`, signs
-`InRelease` and `Release.gpg`, and checks both signatures against the public key
-users get. Release fields: `Origin: validity-rs`, `Label: validity-rs`,
-`Suite`/`Codename: trixie`, `Components: main`, `Architectures: amd64`.
+function of them: each publication rebuilds it) with `apt-ftparchive`, puts
+each .deb in the suite its version suffix names (none: `trixie`;
+`.ubuntu24.04`: `noble`; `.ubuntu26.04`: `resolute`; any other Ubuntu suffix
+fails), requires validity-daemon and the keyring package in every suite it
+writes, signs each suite's `InRelease` and `Release.gpg`, and checks both
+signatures against the public key users get. Release fields: `Origin:
+validity-rs`, `Label: validity-rs`, `Suite` and `Codename` the suite,
+`Components: main`, `Architectures: amd64`.
 
 ### On a user's machine
 
 One package, `validity-rs-archive-keyring` (built by
 `ci/packages/build-keyring.sh`, lintian clean), installs, like Debian's own
-keyring packages:
+keyring packages, the files below. It is built once per suite, its version
+suffixed like the suite's other packages (`<date>.ubuntu24.04`), each build
+with its own suite in the source (`Suites: noble`): the source is a conffile
+that dpkg manages, so it cannot depend on the machine. The rest is the same
+in every build.
 
 | File | What |
 |---|---|
 | `/usr/share/keyrings/validity-rs-archive-keyring.gpg` | the key, outside apt's global trust |
-| `/etc/apt/sources.list.d/validity-rs.sources` | the source, deb822, `Signed-By:` that keyring only |
+| `/etc/apt/sources.list.d/validity-rs.sources` | the source, deb822, the suite's `Suites:`, `Signed-By:` that keyring only |
 | `/etc/apt/apt.conf.d/50validity-rs` | `Unattended-Upgrade::Origins-Pattern`: `origin=validity-rs,codename=${distro_codename},label=validity-rs` |
 
-`Signed-By` scopes the key to this repository: it cannot sign for Debian or any
-other source, and Debian's keys cannot sign for this one (the APT test checks
-the latter). The two files in `/etc` are conffiles. Upgrades of the package
+`Signed-By` scopes the key to this repository: it cannot sign for Debian,
+Ubuntu or any other source, and the distribution's keys cannot sign for this
+one (the APT test checks the latter). The unattended-upgrades pattern matches
+on Ubuntu as on Debian: `${distro_codename}` is the release's codename, which
+is the suite's `Codename`, and Ubuntu's unattended-upgrades reads
+`Origins-Pattern` in addition to its own `Allowed-Origins`. The two files in `/etc` are conffiles. Upgrades of the package
 carry key rotations.
 
-Bootstrap, once:
+Bootstrap, once (the suite is the release's codename from `/etc/os-release`:
+`trixie`, `noble` or `resolute`):
 
 ```bash
 curl -fsSLO https://validity-rs.github.io/apt/validity-rs-archive-keyring.gpg
 gpg --show-keys --with-fingerprint validity-rs-archive-keyring.gpg
 #   must show 59CB F35F 3147 A424 BE25  DF07 8F4B 8482 B486 C8FD
 sudo install -m 0644 validity-rs-archive-keyring.gpg /usr/share/keyrings/
+. /etc/os-release
 sudo curl -fsSL -o /etc/apt/sources.list.d/validity-rs.sources \
-    https://validity-rs.github.io/apt/validity-rs.sources
+    "https://validity-rs.github.io/apt/validity-rs-$VERSION_CODENAME.sources"
 sudo apt update
 sudo apt install validity-rs-archive-keyring validity-daemon unattended-upgrades
 ```
+
+Until the first release after 0.1.0 is published, the repository holds
+`trixie` only and its source is `validity-rs.sources` (the per-suite files
+come with that release).
+
+The source downloaded is byte for byte the one the suite's keyring package
+installs, so dpkg takes it over without a question. On a release upgrade (say
+noble to resolute), point the source at the new suite (`Suites:`) and the new
+suite's keyring package follows.
 
 From then on `apt upgrade`, or unattended-upgrades on its own, brings new
 versions.
@@ -434,18 +508,22 @@ failed. That trade-off can be revisited once publication is routine.
 
 ### The APT test
 
-`ci/packages/run.sh apt`, in CI:
+`ci/packages/run.sh apt` (trixie), `apt-noble` and `apt-resolute`, in CI:
 
-1. Builds the .deb, and a rebuild at Debian revision 2 as "the next release".
+1. Builds the suite's .deb in its release, and a rebuild at Debian revision 2
+   (`-2.ubuntu24.04` on noble) as "the next release".
 2. In the build image, without network: makes a **throwaway key** laid out like
-   the real one, builds the keyring package with it, and writes two
+   the real one, builds the suite's keyring package with it, and writes two
    repositories: `v1` (revision 1) and `v2` (revision 2).
-3. Serves `v1` over HTTP from one container. A clean trixie with systemd (and
-   nothing else) bootstraps from it as above, checks that Debian's key is
-   refused for this repository, runs `apt update` (no warning allowed),
-   `apt install validity-daemon`, and `fingerprint-settings` when its .deb is
-   there (from the sibling repository's `dist/debian`, otherwise skipped with a
-   notice), and installs unattended-upgrades.
+3. Serves `v1` over HTTP from one container. A clean system of that release
+   with systemd (and nothing else) bootstraps from it as above (the source
+   named by its `/etc/os-release`), installs the keyring package over the
+   bootstrap files and checks they are unchanged, checks that the
+   distribution's own key is refused for this repository, runs `apt update`
+   (no warning allowed), `apt install validity-daemon`, and
+   `fingerprint-settings` when its .deb for the suite is there (from the
+   sibling repository's `dist/debian` or `dist/ubuntu-<suite>`, otherwise
+   skipped with a notice), and installs unattended-upgrades.
 4. Publishes `v2` on the server; `unattended-upgrade --dry-run` must list
    validity-daemon and change nothing, then `unattended-upgrade` must upgrade it
    to revision 2 and restart the running daemon.
@@ -461,8 +539,9 @@ published.
    version, and the CI and Packages workflows are green on the tagged commit
    (it waits for them while they run).
 2. **One source tarball**, then every package built from it in its pinned image
-   and run through its install cycle again; the .deb is rebuilt and compared
-   (`repro`); the keyring package is built with the real public key.
+   and run through its install cycle again (the .deb in Debian and in each
+   Ubuntu suite); each .deb is rebuilt and compared (`repro`, `repro-<suite>`);
+   the keyring packages (one per suite) are built with the real public key.
 3. **SHA256SUMS** over every file, signed (`SHA256SUMS.asc`) by the archive
    signing subkey in the `apt` environment and checked with `gpgv` against
    `packaging/apt/validity-rs-archive-keyring.gpg`. Without the secret a
@@ -478,7 +557,10 @@ published.
    `CRATES_IO_PUBLISH`, `APT_PUBLISH`, `COPR_PUBLISH`, `AUR_PUBLISH`.
 
 Files of a release: `validity-rs-<v>.tar.gz` (the vendored sources),
-`validity-daemon_<v>-1_amd64.deb`, `validity-rs-archive-keyring_<date>_all.deb`,
+`validity-daemon_<v>-1_amd64.deb` and its Ubuntu builds
+(`validity-daemon_<v>-1.ubuntu24.04_amd64.deb`, `-1.ubuntu26.04`),
+`validity-rs-archive-keyring_<date>_all.deb` and its Ubuntu builds
+(`_<date>.ubuntu24.04_all.deb`, `.ubuntu26.04`),
 `validity-daemon-<v>-1.fc44.x86_64.rpm` and its `.src.rpm`,
 `validity-daemon-<v>-1-x86_64.pkg.tar.zst`, the three Alpine `.apk`
 (daemon, `-openrc`, `-doc`), `validity-daemon-<v>-aur.tar.gz` (PKGBUILD pinned to
@@ -523,8 +605,8 @@ configured on an existing crate. So, once, after the publication audit:
 
 The repository is `validity-rs/apt` (Pages is free for public repositories),
 served from its `gh-pages` branch. The `apt` job rebuilds the tree from the
-release's .deb files plus the latest fingerprint-settings release
-(`ci/packages/run.sh apttree`), and commits it to that branch (history kept,
+release's .deb files plus the latest fingerprint-settings release (its .deb
+files carry the same suite suffixes; `ci/packages/run.sh apttree`), and commits it to that branch (history kept,
 never forced) with that repository's deploy key. Setting it up, once:
 
 ```bash
@@ -584,6 +666,8 @@ checked against the checksums in `vendor/`. The tarball itself is reproducible
 | lintian | 2.122.0 | trixie |
 | Rust | 1.99.1 | `rust:1.99.1-trixie`, pinned by digest |
 | Debian | 13 (trixie) | `debian:trixie@sha256:4c25275446ca…`, pinned by digest |
+| Ubuntu | 24.04 LTS (noble) | `ubuntu:noble@sha256:68ee22004a91…`, pinned by digest; lintian 2.117.0ubuntu1.5 |
+| Ubuntu | 26.04 LTS (resolute) | `ubuntu:resolute@sha256:c098726dd9b9…`, pinned by digest; lintian 2.129.0ubuntu2.1 |
 | Fedora | 44 | `fedora:latest@sha256:43b29f65a41e…` (as the CI's Fedora job) |
 | Arch Linux | rolling | `archlinux:base@sha256:52dfbd5afb23…` (as the CI's Arch job) |
 | Alpine | 3.24.3 | `alpine:3.24.3@sha256:be2656061b53…`; build: `rust:1.99.1-alpine3.24@sha256:b1d5dd5a22a0…` |

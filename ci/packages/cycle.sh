@@ -5,7 +5,7 @@
 # client, check D-Bus activation, remove the package, then check that fprintd
 # has its activation back and that nothing is left behind.
 #
-#   cycle.sh <debian|fedora|archlinux|alpine> <package file>
+#   cycle.sh <debian|ubuntu-<suite>|fedora|archlinux|alpine> <package file>
 #
 # VENDOR_ONLINE=1 also downloads Lenovo's real package with validity-vendor.
 set -euo pipefail
@@ -87,8 +87,12 @@ snapshot() {
 }
 
 # Distro specifics: install, remove, the package's file list, the init system.
+deb=
 case "$distro" in
-    debian)
+    debian | ubuntu-*)
+        # Ubuntu takes the Debian package as it is (same maintainer scripts,
+        # diversion and pam-auth-update profile), built in its own release.
+        deb=1
         install_pkg() { apt-get install -y --no-install-recommends "$pkg"; }
         remove_pkg() { apt-get purge -y validity-daemon; }
         pkg_files() { dpkg -L validity-daemon; }
@@ -139,8 +143,8 @@ FPRINTD_EXEC='Exec=/usr/lib(exec)?/fprintd'
 expect "$FPRINTD_EXEC" cat "$FPRINT_SERVICE"
 before=$(mktemp)
 snapshot >"$before"
-# Debian only: pam-auth-update and its common-* files.
-if [ "$distro" = debian ]; then cp /etc/pam.d/common-auth /tmp/common-auth.before; fi
+# Debian and Ubuntu only: pam-auth-update and its common-* files.
+if [ -n "$deb" ]; then cp /etc/pam.d/common-auth /tmp/common-auth.before; fi
 
 say "install $(basename "$pkg") (Lenovo's server unreachable on purpose)"
 offline
@@ -165,7 +169,7 @@ else
     test -x /etc/init.d/validity-daemon || fail "OpenRC script missing"
 fi
 
-if [ "$distro" = debian ]; then
+if [ -n "$deb" ]; then
     say "PAM: the validity-fprint profile is shipped, not enabled"
     expect '^Default: no$' cat /usr/share/pam-configs/validity-fprint
     cmp /etc/pam.d/common-auth /tmp/common-auth.before || fail "installing the package changed common-auth"
@@ -178,7 +182,7 @@ fi
 
 say "how net.reactivated.Fprint is activated now"
 case "$distro" in
-    debian)
+    debian | ubuntu-*)
         expect 'Exec=/usr/libexec/validity-daemon' cat "$FPRINT_SERVICE"
         expect "diversion of $FPRINT_SERVICE to $FPRINT_SERVICE.fprintd by validity-daemon" dpkg-divert --list
         expect "$FPRINTD_EXEC" cat "$FPRINT_SERVICE.fprintd"
@@ -249,7 +253,7 @@ if running "$daemon"; then fail "validity-daemon still running after removal"; f
 
 say "fprintd has its activation back"
 expect "$FPRINTD_EXEC" cat "$FPRINT_SERVICE"
-if [ "$distro" = debian ]; then
+if [ -n "$deb" ]; then
     dpkg-divert --list | grep -q validity && fail "diversion left behind"
     cmp /etc/pam.d/common-auth /tmp/common-auth.before || fail "common-auth differs after removal"
     echo "    common-auth byte-identical to the one before installation"

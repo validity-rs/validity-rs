@@ -1,3 +1,10 @@
+validity-rs-archive-keyring (2026.10.25) unstable; urgency=medium
+
+  * One build per suite (Debian 13, Ubuntu 24.04 LTS, Ubuntu 26.04 LTS), each
+    with its own suite in the APT source.
+
+ -- validity-rs maintainers <409744+pierre-warnier@users.noreply.github.com>  Sun, 25 Oct 2026 12:00:00 +0000
+
 validity-rs-archive-keyring (2026.10.24) unstable; urgency=medium
 
   * First key: ed25519 signing subkey of the validity-rs archive key.

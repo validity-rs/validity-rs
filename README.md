@@ -85,8 +85,29 @@ fprintd API.
 
 ## Installing
 
-On Debian 13 (trixie), from the `.deb` built by CI or by `ci/packages/run.sh debian`
-(in `target/packages/debian/`):
+On Debian 13 (trixie), Ubuntu 24.04 LTS (noble) and Ubuntu 26.04 LTS (resolute),
+from the signed APT repository (one suite per release, picked from
+`/etc/os-release`; the key's fingerprint and the details are in
+[docs/packaging.md](docs/packaging.md#on-a-users-machine)):
+
+```bash
+curl -fsSLO https://validity-rs.github.io/apt/validity-rs-archive-keyring.gpg
+gpg --show-keys --with-fingerprint validity-rs-archive-keyring.gpg
+#   must show 59CB F35F 3147 A424 BE25  DF07 8F4B 8482 B486 C8FD
+sudo install -m 0644 validity-rs-archive-keyring.gpg /usr/share/keyrings/
+. /etc/os-release
+sudo curl -fsSL -o /etc/apt/sources.list.d/validity-rs.sources \
+    "https://validity-rs.github.io/apt/validity-rs-$VERSION_CODENAME.sources"
+sudo apt update
+sudo apt install validity-rs-archive-keyring validity-daemon unattended-upgrades
+```
+
+The Ubuntu suites and the per-suite source files are published with the first
+release after 0.1.0; until then the repository holds `trixie` only, and its source
+is `https://validity-rs.github.io/apt/validity-rs.sources`.
+
+Or from a `.deb` built by CI or by `ci/packages/run.sh debian` (`ubuntu-noble`,
+`ubuntu-resolute`), in `target/packages/<distro>/`:
 
 ```bash
 sudo apt install ./validity-daemon_0.1.0-1_amd64.deb
@@ -103,7 +124,7 @@ The package never changes PAM. To log in with a finger, install `libpam-fprintd`
 and keep the fingerprint `sufficient`, never `required`, so that the password
 always works. Enrol with `fprintd-enroll`.
 
-On Debian, the package also ships an optional pam-auth-update profile,
+On Debian and Ubuntu, the package also ships an optional pam-auth-update profile,
 `validity-fprint`, off by default, in place of libpam-fprintd's `fprintd`
 profile. On LightDM (greeter and light-locker) the password comes first, as
 without a reader: the right password logs in at once; an empty one (just
@@ -136,8 +157,8 @@ ci/run.sh mutants-diff                       # mutation testing of the last comm
 ```
 
 `ci/run.sh` is the CI: GitHub Actions calls the same jobs, inside pinned Debian 13
-(trixie) containers. Debian is the reference target. Fedora, Arch Linux and Alpine are
-tested too. The checks are:
+(trixie) containers. Debian is the reference target. Ubuntu (24.04, 26.04), Fedora,
+Arch Linux and Alpine are tested too. The checks are:
 
 - **Warnings:** none tolerated. They are denied in `Cargo.toml` itself, and
   `unsafe` is forbidden.

@@ -50,7 +50,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        job: [debian, fedora, archlinux, alpine, repro, apt]
+        job:
+          - debian
+          - ubuntu-noble
+          - ubuntu-resolute
+          - fedora
+          - archlinux
+          - alpine
+          - repro
+          - repro-noble
+          - repro-resolute
+          - apt
+          - apt-noble
+          - apt-resolute
+          - keyring
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -1,0 +1,89 @@
+# Ubuntu packaging: build the .deb in the Ubuntu release it is for, and test it
+# there (ci/packages/run.sh ubuntu-<suite>, apt-<suite>). One file for every
+# Ubuntu suite of ci/packages/suites.sh: --build-arg SUITE=<codename> picks the
+# release, the stages are the same as Dockerfile.pkg-debian's.
+#
+#   build   that release with the Rust toolchain of Dockerfile.debian (copied
+#           from the same pinned image: rustup's official builds, which need
+#           only glibc 2.17), cargo-deb built here against this release's
+#           glibc, and lintian. Builds run in it with --network none, from the
+#           vendored source tarball; the binaries link this release's glibc.
+#   test    the release with systemd as PID 1 and what the package works with
+#           (fprintd, polkitd, the D-Bus system bus), preinstalled.
+#   apt-client  the release with systemd as PID 1 and its system bus, nothing
+#           else.
+#
+# Images pinned by digest; Renovate proposes the bumps.
+
+ARG SUITE=resolute
+
+FROM ubuntu:noble@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac AS base-noble
+FROM ubuntu:resolute@sha256:c098726dd9b9733f3e885f8de0ef375206a311b0a317eadc40d347b1115fb944 AS base-resolute
+FROM rust:1.99.1-trixie@sha256:931c2c0531a8b143e044f0f3914dfe802f15bb3d1955f0b657e9359327ac2ffc AS rust
+
+FROM base-${SUITE} AS build
+
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
+COPY --from=rust /usr/local/rustup /usr/local/rustup
+COPY --from=rust /usr/local/cargo /usr/local/cargo
+# Keep in step with Dockerfile.pkg-debian.
+ARG CARGO_DEB_VERSION=3.8.0
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        dpkg-dev \
+        gcc \
+        libc6-dev \
+        lintian \
+    && rm -rf /var/lib/apt/lists/* \
+    && cargo install --locked cargo-deb --version "$CARGO_DEB_VERSION" \
+    && rm -rf /usr/local/cargo/registry \
+    && . /etc/os-release && echo "$PRETTY_NAME" \
+    && rustc --version && cargo deb --version && lintian --version \
+    && dpkg-query -W libc6
+
+WORKDIR /build
+CMD ["/bin/bash"]
+
+FROM base-${SUITE} AS test
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        dbus \
+        fprintd \
+        polkitd \
+        systemd \
+        systemd-sysv \
+    && rm -rf /var/lib/apt/lists/* \
+    && dpkg-query -W fprintd polkitd dbus systemd curl
+
+# Service actions in maintainer scripts must run as on a real system (the
+# Debian image forbids them with a policy-rc.d; removed if this one has it).
+RUN rm -f /usr/sbin/policy-rc.d
+
+STOPSIGNAL SIGRTMIN+3
+# Never let systemd in a test container touch a console (defence in depth: the
+# container has no host devices anyway).
+RUN systemctl mask getty.target console-getty.service getty@tty1.service \
+        serial-getty@ttyS0.service systemd-logind.service systemd-vconsole-setup.service
+# Docker mounts the container's own cgroup tree (private cgroup namespace)
+# read-only unless --privileged, which the tests never use; systemd needs it
+# writable. Only that namespace is remounted: the host's tree is not visible.
+CMD ["/bin/sh", "-c", "mount -o remount,rw /sys/fs/cgroup && exec /usr/lib/systemd/systemd"]
+
+FROM base-${SUITE} AS apt-client
+
+# The system bus too: on a real machine it runs from boot, and a bus installed
+# after boot (as a dependency) is not started by its package.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends dbus systemd systemd-sysv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN rm -f /usr/sbin/policy-rc.d
+
+STOPSIGNAL SIGRTMIN+3
+RUN systemctl mask getty.target console-getty.service getty@tty1.service \
+        serial-getty@ttyS0.service systemd-logind.service systemd-vconsole-setup.service
+CMD ["/bin/sh", "-c", "mount -o remount,rw /sys/fs/cgroup && exec /usr/lib/systemd/systemd"]

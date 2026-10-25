@@ -5,11 +5,15 @@
 #
 #   ci/packages/run.sh                 # source, every distro, repro, apt
 #   ci/packages/run.sh debian          # one distro (builds the tarball if absent)
+#   ci/packages/run.sh ubuntu-noble    # Ubuntu, one job per suite (suites.sh)
 #   ci/packages/run.sh source          # only the vendored source tarball
 #   ci/packages/run.sh apt             # APT repository from the .deb: apt install
 #                                      # and unattended upgrade in a clean trixie
+#   ci/packages/run.sh apt-noble       # the same for an Ubuntu suite
 #   ci/packages/run.sh repro           # build the .deb twice, compare
-#   ci/packages/run.sh keyring         # the keyring package, real public key
+#   ci/packages/run.sh repro-noble     # the same for an Ubuntu suite
+#   ci/packages/run.sh keyring         # the keyring packages (one per suite),
+#                                      # real public key
 #   ci/packages/run.sh apttree         # the signed APT tree (release; needs
 #                                      # APT_SIGNING_KEY and target/packages/apt-debs)
 #
@@ -29,7 +33,11 @@ OUT=$(cd "$OUT" && pwd)
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 TARBALL=validity-rs-$VERSION.tar.gz
 export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct HEAD)}
-DISTROS=(debian fedora archlinux alpine)
+# shellcheck source=suites.sh
+. "$ROOT/ci/packages/suites.sh"
+UBUNTU=()
+for s in "${SUITES[@]}"; do [ "$s" = trixie ] || UBUNTU+=("$s"); done
+DISTROS=(debian "${UBUNTU[@]/#/ubuntu-}" fedora archlinux alpine)
 CPUS=()
 [ -n "${PKG_CPUS:-}" ] && CPUS=(--cpuset-cpus "$PKG_CPUS")
 
@@ -43,15 +51,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# image <distro> <build|test>: builds docker/Dockerfile.pkg-<distro> --target.
+# image <distro> <build|test|apt-client>: builds docker/Dockerfile.pkg-<distro>
+# --target; ubuntu-<suite> is docker/Dockerfile.pkg-ubuntu for that suite.
 image() {
-    local tag="validity-rs-pkg-$1-$2" attempt
+    local tag="validity-rs-pkg-$1-$2" attempt file=docker/Dockerfile.pkg-$1 args=()
+    case "$1" in
+        ubuntu-*) file=docker/Dockerfile.pkg-ubuntu args=(--build-arg "SUITE=${1#ubuntu-}") ;;
+    esac
     for attempt in 1 2 3; do
         if [ ${#CPUS[@]} -gt 0 ]; then
             # BuildKit has no CPU limit; the classic builder does.
-            DOCKER_BUILDKIT=0 docker build -q "${CPUS[@]}" -f "docker/Dockerfile.pkg-$1" --target "$2" -t "$tag" docker >/dev/null
+            DOCKER_BUILDKIT=0 docker build -q "${CPUS[@]}" "${args[@]}" -f "$file" --target "$2" -t "$tag" docker >/dev/null
         else
-            docker build -q -f "docker/Dockerfile.pkg-$1" --target "$2" -t "$tag" docker >/dev/null
+            docker build -q "${args[@]}" -f "$file" --target "$2" -t "$tag" docker >/dev/null
         fi && { echo "$tag"; return 0; }
         echo "image $tag: attempt $attempt failed" >&2
         [ "$attempt" -lt 3 ] && sleep 30
@@ -129,6 +141,17 @@ job_debian() {
     cycle debian "/out/debian/validity-daemon_${VERSION}-1_amd64.deb"
 }
 
+# Ubuntu, one suite: the same .deb, built in that release, with the suite's
+# revision suffix (ci/packages/suites.sh), and the same cycle.
+job_ubuntu() {
+    local suite=$1 d=ubuntu-$1 sfx
+    sfx=$(suite_suffix "$suite")
+    need_source
+    rm -rf "${OUT:?}/$d"
+    build "$d" build-deb.sh "/out/$d" "1$sfx"
+    cycle "$d" "/out/$d/validity-daemon_${VERSION}-1${sfx}_amd64.deb"
+}
+
 job_fedora() {
     need_source
     rm -rf "$OUT/fedora"
@@ -150,44 +173,62 @@ job_alpine() {
     cycle alpine "$(cd "$OUT" && ls alpine/validity-daemon-"$VERSION"-r*.apk | sed 's|^|/out/|')"
 }
 
-# Reproducibility: the .deb built twice from the same tarball is the same file.
+# Reproducibility: the .deb built twice from the same tarball is the same file
+# (Debian, or the Ubuntu suite given).
 job_repro() {
+    local suite=${1:-trixie} d dir sfx rev=() a b
     need_source
-    local a b
-    rm -rf "$OUT/repro"
-    build debian build-deb.sh /out/repro/1
-    build debian build-deb.sh /out/repro/2
-    a=$(sha256sum "$OUT"/repro/1/*.deb | cut -d' ' -f1)
-    b=$(sha256sum "$OUT"/repro/2/*.deb | cut -d' ' -f1)
+    d=$(deb_distro "$suite") sfx=$(suite_suffix "$suite")
+    dir=repro${1:+-$1}
+    [ -z "$sfx" ] || rev=("1$sfx")
+    rm -rf "${OUT:?}/$dir"
+    build "$d" build-deb.sh "/out/$dir/1" "${rev[@]}"
+    build "$d" build-deb.sh "/out/$dir/2" "${rev[@]}"
+    a=$(sha256sum "$OUT/$dir"/1/*.deb | cut -d' ' -f1)
+    b=$(sha256sum "$OUT/$dir"/2/*.deb | cut -d' ' -f1)
     echo "build 1: $a"
     echo "build 2: $b"
     [ "$a" = "$b" ] || { echo "the two builds differ" >&2; return 1; }
 }
 
-# The APT repository: built from this .deb and a bumped rebuild, signed with a
-# throwaway key, served over HTTP to a clean trixie that installs from it, then
-# upgrades through unattended-upgrades once the next version is published.
-# fingerprint-settings joins when its .deb is at FINGERPRINT_SETTINGS_DEBS
-# (default: the sibling repository's dist/debian).
+# The .deb distro (image) of a suite: debian, or ubuntu-<suite>.
+deb_distro() { if [ "$1" = trixie ]; then echo debian; else echo "ubuntu-$1"; fi; }
+
+# The APT repository of one suite (default trixie): built from this .deb and a
+# bumped rebuild, signed with a throwaway key, served over HTTP to a clean
+# system of that release that installs from it, then upgrades through
+# unattended-upgrades once the next version is published. fingerprint-settings
+# joins when its .deb for the suite is in FINGERPRINT_SETTINGS_DEBS (default:
+# the sibling repository's dist/debian, or dist/ubuntu-<suite>).
 job_apt() {
+    local suite=${1:-trixie} d sfx rev=() deb1 deb2 fs f
     need_source
-    [ -f "$OUT/debian/validity-daemon_${VERSION}-1_amd64.deb" ] || {
-        rm -rf "$OUT/debian"
-        build debian build-deb.sh /out/debian
+    d=$(deb_distro "$suite") sfx=$(suite_suffix "$suite")
+    [ -z "$sfx" ] || rev=("1$sfx")
+    deb1=$d/validity-daemon_${VERSION}-1${sfx}_amd64.deb
+    [ -f "$OUT/$deb1" ] || {
+        rm -rf "${OUT:?}/$d"
+        build "$d" build-deb.sh "/out/$d" "${rev[@]}"
     }
     rm -rf "$OUT/apt-next" "$OUT/apt" "$OUT/extra"
     # The "next release": same sources, Debian revision 2.
-    build debian build-deb.sh /out/apt-next 2
-    local fs=${FINGERPRINT_SETTINGS_DEBS:-$ROOT/../fingerprint-settings/dist/debian}
-    if ls "$fs"/fingerprint-settings_*_amd64.deb >/dev/null 2>&1; then
+    build "$d" build-deb.sh /out/apt-next "2$sfx"
+    deb2=apt-next/validity-daemon_${VERSION}-2${sfx}_amd64.deb
+    fs=${FINGERPRINT_SETTINGS_DEBS:-$ROOT/../fingerprint-settings/dist/$d}
+    for f in "$fs"/fingerprint-settings_*_amd64.deb; do
+        [ -f "$f" ] || continue
+        # Only this suite's build (a Debian one has no .ubuntu suffix).
+        case "$(basename "$f")" in
+            *.ubuntu*) [[ -n $sfx && $f == *"${sfx}_amd64.deb" ]] || continue ;;
+            *) [ -z "$sfx" ] || continue ;;
+        esac
         mkdir -p "$OUT/extra"
-        cp "$fs"/fingerprint-settings_*_amd64.deb "$OUT/extra/"
-    else
-        echo "NOTICE: no fingerprint-settings .deb in $fs; the APT test runs without it"
-    fi
+        cp "$f" "$OUT/extra/"
+    done
+    [ -d "$OUT/extra" ] || echo "NOTICE: no fingerprint-settings .deb for $suite in $fs; the APT test runs without it"
     docker run --rm "${CPUS[@]}" --network none \
         -v "$ROOT/ci/packages:/ci:ro" -v "$ROOT/packaging:/packaging:ro" -v "$OUT:/out" \
-        -e SOURCE_DATE_EPOCH "$(image debian build)" bash /ci/apt-test-repo.sh /out
+        -e SOURCE_DATE_EPOCH "$(image debian build)" bash /ci/apt-test-repo.sh /out "$suite" "/out/$deb1" "/out/$deb2"
     own
 
     local net=validity-rs-apt-$$ server client status=0
@@ -201,27 +242,30 @@ job_apt() {
         sh -c 'cp -R /repos/v1/. /srv/ && exec python3 -I -m http.server 8000 --directory /srv')
     client=$(docker run -d "${CPUS[@]}" --network "$net" "${SYSTEMD_CTR[@]}" \
         --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
-        -v "$ROOT/ci/packages:/ci:ro" "$(image debian apt-client)")
+        -v "$ROOT/ci/packages:/ci:ro" "$(image "$d" apt-client)")
     CONTAINERS+=("$server" "$client")
     not_privileged "$server"
     not_privileged "$client"
     {
-        docker exec "$client" bash /ci/apt-client.sh install \
+        docker exec "$client" bash /ci/apt-client.sh install "$suite" \
             && docker exec "$server" sh -c 'rm -rf /srv/* && cp -R /repos/v2/. /srv/' \
-            && docker exec "$client" bash /ci/apt-client.sh upgrade
+            && docker exec "$client" bash /ci/apt-client.sh upgrade "$suite"
     } || status=$?
     [ "$status" -eq 0 ] || docker logs "$server" 2>&1 | tail -30
     return "$status"
 }
 
-# The release's keyring package, with the real public key
+# The release's keyring packages, one per suite, with the real public key
 # (packaging/apt/validity-rs-archive-keyring.gpg).
 job_keyring() {
+    local suite
     rm -rf "$OUT/keyring"
-    docker run --rm "${CPUS[@]}" --network none \
-        -v "$ROOT/ci/packages:/ci:ro" -v "$ROOT/packaging:/packaging:ro" -v "$OUT:/out" \
-        -e SOURCE_DATE_EPOCH "$(image debian build)" \
-        bash /ci/build-keyring.sh /packaging/apt/validity-rs-archive-keyring.gpg /out/keyring
+    for suite in "${SUITES[@]}"; do
+        docker run --rm "${CPUS[@]}" --network none \
+            -v "$ROOT/ci/packages:/ci:ro" -v "$ROOT/packaging:/packaging:ro" -v "$OUT:/out" \
+            -e SOURCE_DATE_EPOCH "$(image debian build)" \
+            bash /ci/build-keyring.sh /packaging/apt/validity-rs-archive-keyring.gpg /out/keyring "$suite"
+    done
     own
 }
 
@@ -237,16 +281,32 @@ job_apttree() {
     own
 }
 
+# job_call <job>: the function and argument of a job name (ubuntu-<suite>,
+# repro-<suite> and apt-<suite> take an Ubuntu suite of suites.sh).
+job_call() {
+    local s
+    case "$1" in
+        ubuntu-* | repro-* | apt-*)
+            for s in "${UBUNTU[@]}"; do
+                [ "${1#*-}" = "$s" ] && { echo "job_${1%%-*} $s"; return 0; }
+            done
+            return 1 ;;
+        *) declare -F "job_$1" >/dev/null && echo "job_$1" ;;
+    esac
+}
+
 # One job per process: bash ignores set -e inside a function called from a
 # `||` list, so a job run in-process would carry on past a failed step.
 if [ "${1:-}" = --job ]; then
-    "job_$2"
+    call=$(job_call "$2") || { echo "unknown job: $2" >&2; exit 2; }
+    read -r -a call <<<"$call"
+    "${call[@]}"
     exit
 fi
 jobs=("$@")
-[ ${#jobs[@]} -eq 0 ] && jobs=(source "${DISTROS[@]}" repro apt)
+[ ${#jobs[@]} -eq 0 ] && jobs=(source "${DISTROS[@]}" repro "${UBUNTU[@]/#/repro-}" apt "${UBUNTU[@]/#/apt-}")
 for j in "${jobs[@]}"; do
-    declare -F "job_$j" >/dev/null || { echo "unknown job: $j" >&2; exit 2; }
+    job_call "$j" >/dev/null || { echo "unknown job: $j" >&2; exit 2; }
 done
 failed=()
 for j in "${jobs[@]}"; do
