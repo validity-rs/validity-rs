@@ -86,7 +86,10 @@ phase_install() {
 
     say "the key is trusted for this repository only"
     cp "$SOURCES" /tmp/sources.good
-    distro_key=$(ls /usr/share/keyrings/debian-archive-keyring.pgp /usr/share/keyrings/ubuntu-archive-keyring.gpg 2>/dev/null | head -1)
+    distro_key=
+    for k in /usr/share/keyrings/debian-archive-keyring.pgp /usr/share/keyrings/ubuntu-archive-keyring.gpg; do
+        [ -f "$k" ] && distro_key=$k && break
+    done
     [ -n "$distro_key" ] || fail "no distribution archive key"
     sed -i "s|^Signed-By: .*|Signed-By: $distro_key|" "$SOURCES"
     expect "NO_PUBKEY|not signed|is not signed|Missing key|could not be verified|no valid OpenPGP" apt-get update
