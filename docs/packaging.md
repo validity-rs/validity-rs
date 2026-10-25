@@ -49,40 +49,58 @@ The .deb ships `/usr/share/pam-configs/validity-fprint`
 (`packaging/debian/pam-configs/`), a pam-auth-update profile that is never
 enabled by the package (`Default: no`, no `pam-auth-update` call in `postinst`).
 It takes the place of libpam-fprintd's `fprintd` profile (same `Priority: 260`,
-`Conflicts: fprintd`: enabled alone, it disables fprintd's) and adds messages
-on LightDM, whose greeters wait for Enter after an authentication that answered
-no prompt. Enabled, `common-auth` reads:
+`Conflicts: fprintd`: enabled alone, it disables fprintd's).
+
+- **LightDM** (service `lightdm`: the greeter and light-locker): the password
+  first, as without fingerprint support. The right password logs in at once
+  and the sensor is not asked. An empty password (just Enter) shows one line,
+  `Posez le doigt sur le lecteur.`, then waits up to 30 s for a finger: a
+  match shows `<user> reconnu, appuyez sur Entrée.` (LightDM's greeters wait
+  for Enter after an authentication that answered no prompt) and logs in; no
+  match, no finger, no daemon or no sensor fail, and the greeter asks the
+  password again.
+- **Every other service** (sudo, su, login, polkit, ...): exactly fprintd's
+  line, the finger first (10 s), then the password; none of our messages.
+
+Enabled, `common-auth` reads:
 
 ```
-auth  [success=ignore default=1]  pam_succeed_if.so quiet service = lightdm
-auth  [default=ignore]            pam_echo.so Posez le doigt sur le lecteur d'empreintes (il s'allume). Sans doigt, le mot de passe est demandé après 10 secondes.
-auth  [success=ok default=2]      pam_fprintd.so max-tries=1 timeout=10
-auth  [success=ok default=3]      pam_succeed_if.so quiet service = lightdm
-auth  [default=2]                 pam_echo.so %u reconnu, appuyez sur Entrée.
-auth  [success=1 default=ignore]  pam_unix.so nullok try_first_pass
-auth  requisite                   pam_deny.so
-auth  required                    pam_permit.so
+auth  [success=ignore default=4]    pam_succeed_if.so quiet service = lightdm
+auth  [success=6 default=ignore]    pam_unix.so nullok
+auth  [default=ignore]              pam_echo.so Posez le doigt sur le lecteur.
+auth  [success=ok default=die]      pam_fprintd.so max-tries=1 timeout=30
+auth  [default=3]                   pam_echo.so %u reconnu, appuyez sur Entrée.
+auth  [success=2 default=ignore]    pam_fprintd.so max-tries=1 timeout=10
+auth  [success=1 default=ignore]    pam_unix.so nullok try_first_pass
+auth  requisite                     pam_deny.so
+auth  required                      pam_permit.so
 ```
 
 - pam-auth-update turns each `end` of the profile into the jump that lands
   on `pam_permit` (the number of lines left in the primary block, plus the
-  `pam_deny` fallback); the `1` and `2` of the profile are jumps inside it.
+  `pam_deny` fallback); the `4` of the profile is a jump inside it, to the
+  line for other services.
 - In `pam_authenticate`, a jump does not change the stack's result
   (`libpam/pam_dispatch.c`: only a cached chain, as for `pam_setcred`,
-  records it), and `ignore` neither. So the two lines before `pam_fprintd`
-  change no outcome, and anything but `PAM_SUCCESS` from `pam_fprintd`
-  (no match, timeout, no daemon, no device, a module that fails to load)
-  jumps over the message to `pam_unix`, as fprintd's
-  `[success=end default=ignore]` does.
-- Only `PAM_SUCCESS` from `pam_fprintd` goes on. Its `ok` records the success;
-  outside LightDM, `pam_succeed_if` fails and jumps to `pam_permit`;
-  on LightDM, `pam_echo` (`PAM_SUCCESS` once the message is sent,
-  `PAM_IGNORE` under `PAM_SILENT`, Linux-PAM's `pam_echo.c` and its manual)
-  jumps there whatever it returns. No path after a match reaches `pam_unix`
-  or `pam_deny`.
-- `%u` is the user name. The service is LightDM's `lightdm` (the greeter
-  and light-locker authenticate through it); sudo, su, login and polkit get
-  no message.
+  records it), and `ignore` neither.
+- On LightDM, only `PAM_SUCCESS` from `pam_unix` (the right password) or from
+  `pam_fprintd` (a match: `ok`, then the message, whose `pam_echo` jumps to
+  `pam_permit` whatever it returns) leads to `pam_permit`. Anything else from
+  the 30 s `pam_fprintd` (no match, timeout, no daemon, no device, a module
+  that fails to load) is `die`: the stack fails at once with that code, never
+  `PAM_IGNORE` (libpam turns it into a failure), and never reaches the second
+  `pam_unix`.
+- **A wrong password also goes to the finger.** Linux-PAM cannot tell an
+  empty password from a wrong one: `pam_unix` returns `PAM_AUTH_ERR` for
+  both, `pam_get_authtok` accepts an empty answer, and no stock module tests
+  the token (`pam_exec expose_authtok` would hand it to a script). So after
+  a wrong password the line and the finger wait come too; a matching finger
+  then logs in, which is what the finger may do anyway, and anything else
+  fails as above. Telling them apart would take a PAM module of our own.
+- The password prompt is `pam_unix`'s own, which takes no prompt option, so
+  nothing is added before it: one line of ours at most at any moment.
+- Outside LightDM, `pam_succeed_if` fails and jumps to fprintd's own line;
+  from there on the stack is fprintd's profile, unchanged.
 - `prerm` (on `remove`) runs `pam-auth-update --package --remove validity-fprint`,
   so removing the package takes the profile out of `common-*` before its
   file goes. fprintd's profile is not re-enabled: the password keeps working,
@@ -98,16 +116,18 @@ sudo pam-auth-update --disable validity-fprint --enable fprintd
 
 `ci/e2e/run.sh` tests it with pamtester against the daemon on the emulated
 sensor, from the stock `common-*` with fprintd's profile enabled: the exact
-stack above; on `lightdm`, a match prints both messages and asks no password
-(a wrong password on stdin still succeeds); on another service, no message;
-a refused finger and pam_fprintd's 10 s timeout ask the password, the right
-one succeeds and a wrong one fails, on `lightdm` and elsewhere; the same with
-the daemon activated without a sensor, with no activatable daemon, and with
-`pam_fprintd.so` removed; `pam_setcred` succeeds after each success. Then
-disabling it gives back fprintd's `common-*` byte for byte, and the stock ones
-after `--disable` or prerm's `--remove`. The Debian package cycle checks the
-installed profile, enables it, and checks that `apt purge` restores
-`common-auth` byte for byte.
+stack above; on `lightdm`, the right password succeeds in under 3 s without
+the sensor, an empty password and a matching finger succeed with both lines,
+an empty or wrong password with an unknown finger or no finger (30 s) fail,
+and a wrong password with a matching finger succeeds; on another service, a
+match asks no password and shows nothing, a refused finger and the 10 s
+timeout ask the password, the right one succeeds and a wrong one fails. The
+same password checks pass with the daemon activated without a sensor, with no
+activatable daemon, and with `pam_fprintd.so` removed, and `pam_setcred`
+succeeds after each success. Disabling it gives back fprintd's `common-*` byte
+for byte, and the stock ones after `--disable` or prerm's `--remove`. The
+Debian package cycle checks the installed profile, enables it, and checks that
+`apt purge` restores `common-auth` byte for byte.
 
 ## Vendor files: validity-vendor
 

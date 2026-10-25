@@ -1,11 +1,12 @@
-Name: Fingerprint authentication with messages on LightDM (validity-rs)
+Name: Fingerprint authentication, password first on LightDM (validity-rs)
 Default: no
 Priority: 260
 Conflicts: fprintd
 Auth-Type: Primary
 Auth:
-	[success=ignore default=1]	pam_succeed_if.so quiet service = lightdm
-	[default=ignore]	pam_echo.so Posez le doigt sur le lecteur d'empreintes (il s'allume). Sans doigt, le mot de passe est demandé après 10 secondes.
-	[success=ok default=2]	pam_fprintd.so max-tries=1 timeout=10
-	[success=ok default=end]	pam_succeed_if.so quiet service = lightdm
+	[success=ignore default=4]	pam_succeed_if.so quiet service = lightdm
+	[success=end default=ignore]	pam_unix.so nullok
+	[default=ignore]	pam_echo.so Posez le doigt sur le lecteur.
+	[success=ok default=die]	pam_fprintd.so max-tries=1 timeout=30
 	[default=end]	pam_echo.so %u reconnu, appuyez sur Entrée.
+	[success=end default=ignore]	pam_fprintd.so max-tries=1 timeout=10

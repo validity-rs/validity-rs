@@ -40,9 +40,9 @@ It replaces fprintd's daemon by taking over its D-Bus activation file only; \
 removing this package gives fprintd its file back. PAM is not configured: \
 enabling fingerprint login (always 'sufficient', never 'required') is the \
 administrator's choice. An optional pam-auth-update profile, validity-fprint \
-(off by default), replaces libpam-fprintd's own profile and adds two \
-messages on LightDM: how to use the reader, and to press Enter once the \
-finger is recognised. \
+(off by default), replaces libpam-fprintd's own profile: on LightDM the \
+password comes first and an empty one asks for the finger, saying when to \
+press Enter; other services keep the finger first. \
 The Synaptics vendor files, which may not be \
 redistributed, are downloaded on installation by validity-vendor and checked \
 by SHA-256."""

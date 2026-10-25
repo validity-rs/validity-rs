@@ -104,13 +104,14 @@ and keep the fingerprint `sufficient`, never `required`, so that the password
 always works. Enrol with `fprintd-enroll`.
 
 On Debian, the package also ships an optional pam-auth-update profile,
-`validity-fprint`, off by default. It replaces libpam-fprintd's `fprintd`
-profile with the same fingerprint step and two messages on LightDM (in French
-for now): how to use the reader before the scan, and `<user> reconnu, appuyez
-sur Entrée.` after a match, because LightDM's greeters wait for Enter when no
-prompt was answered. Other services (sudo, su, ...) get no message. A refused
-finger, a timeout or a missing daemon falls through to the password exactly as
-with fprintd's profile:
+`validity-fprint`, off by default, in place of libpam-fprintd's `fprintd`
+profile. On LightDM (greeter and light-locker) the password comes first, as
+without a reader: the right password logs in at once; an empty one (just
+Enter) shows `Posez le doigt sur le lecteur.` and waits 30 s for a finger,
+then `<user> reconnu, appuyez sur Entrée.` on a match, a failure otherwise
+(messages in French for now). PAM cannot tell an empty password from a wrong
+one, so a wrong password leads to the finger too. Other services (sudo, su,
+...) keep fprintd's behaviour: the finger first, then the password.
 
 ```bash
 sudo pam-auth-update --disable fprintd --enable validity-fprint   # switch to it
@@ -153,9 +154,10 @@ tested too. The checks are:
 - **End to end:** in a Debian container, the daemon runs with a fake sensor and is
   driven by fprintd's own `fprintd-enroll/verify/list/delete`, `pam_fprintd` (through
   `pamtester`) and a real polkit. The `validity-fprint` PAM profile is enabled with
-  `pam-auth-update` over fprintd's and tested there: messages and no password on a
-  match, the password (right one only) on a refused finger, a timeout, no daemon or
-  no `pam_fprintd.so`, and `common-*` restored byte for byte when it is disabled.
+  `pam-auth-update` over fprintd's and tested there: on LightDM the password first,
+  the finger after an empty one; elsewhere the finger then the password; passwords
+  still work with no daemon or no `pam_fprintd.so`; `common-*` restored byte for
+  byte when it is disabled.
 - **Fuzzing** of every parser and of the handshake: 30 s per target on each push,
   10 minutes weekly.
 - **Mutation testing** (cargo-mutants) of both crates: every mutant must make a test
