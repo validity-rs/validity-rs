@@ -30,6 +30,7 @@ Output goes to `target/packages/`.
 | `/usr/share/dbus-1/system-services/net.reactivated.Fprint.service` | D-Bus activation (Debian: diverted, see below) |
 | `/usr/share/dbus-1/system.d/validity-daemon.conf` | bus policy (the same grants as fprintd's) |
 | `/usr/lib/udev/rules.d/60-validity-daemon.rules` | starts the unit when a supported sensor appears |
+| `/usr/share/pam-configs/validity-fprint` | Debian only: optional PAM profile, off by default (see below) |
 | `/usr/share/metainfo/io.github.validity_rs.validity_daemon.metainfo.xml` | AppStream: the USB IDs it drives |
 | `/usr/share/doc/validity-daemon/validity.toml.example` | every setting, with its default |
 | `/var/lib/validity/` | state: calibration, `vendor/` (created at run time) |
@@ -41,6 +42,72 @@ package depends on `fprintd`. Its tools (`fprintd-list`, `-enroll`, `-verify`,
 **PAM is never touched.** No package enables fingerprint login. `libpam-fprintd`
 is only suggested. Enabling it is the administrator's choice, and it must stay
 `sufficient`, never `required`, so that the password always works.
+
+### Debian: the `validity-fprint` PAM profile
+
+The .deb ships `/usr/share/pam-configs/validity-fprint`
+(`packaging/debian/pam-configs/`), a pam-auth-update profile that is never
+enabled by the package (`Default: no`, no `pam-auth-update` call in `postinst`).
+It takes the place of libpam-fprintd's `fprintd` profile (same `Priority: 260`,
+`Conflicts: fprintd`: enabled alone, it disables fprintd's) and adds messages
+on LightDM, whose greeters wait for Enter after an authentication that answered
+no prompt. Enabled, `common-auth` reads:
+
+```
+auth  [success=ignore default=1]  pam_succeed_if.so quiet service = lightdm
+auth  [default=ignore]            pam_echo.so Posez le doigt sur le lecteur d'empreintes (il s'allume). Sans doigt, le mot de passe est demandé après 10 secondes.
+auth  [success=ok default=2]      pam_fprintd.so max-tries=1 timeout=10
+auth  [success=ok default=3]      pam_succeed_if.so quiet service = lightdm
+auth  [default=2]                 pam_echo.so %u reconnu, appuyez sur Entrée.
+auth  [success=1 default=ignore]  pam_unix.so nullok try_first_pass
+auth  requisite                   pam_deny.so
+auth  required                    pam_permit.so
+```
+
+- pam-auth-update turns each `end` of the profile into the jump that lands
+  on `pam_permit` (the number of lines left in the primary block, plus the
+  `pam_deny` fallback); the `1` and `2` of the profile are jumps inside it.
+- In `pam_authenticate`, a jump does not change the stack's result
+  (`libpam/pam_dispatch.c`: only a cached chain, as for `pam_setcred`,
+  records it), and `ignore` neither. So the two lines before `pam_fprintd`
+  change no outcome, and anything but `PAM_SUCCESS` from `pam_fprintd`
+  (no match, timeout, no daemon, no device, a module that fails to load)
+  jumps over the message to `pam_unix`, as fprintd's
+  `[success=end default=ignore]` does.
+- Only `PAM_SUCCESS` from `pam_fprintd` goes on. Its `ok` records the success;
+  outside LightDM, `pam_succeed_if` fails and jumps to `pam_permit`;
+  on LightDM, `pam_echo` (`PAM_SUCCESS` once the message is sent,
+  `PAM_IGNORE` under `PAM_SILENT`, Linux-PAM's `pam_echo.c` and its manual)
+  jumps there whatever it returns. No path after a match reaches `pam_unix`
+  or `pam_deny`.
+- `%u` is the user name. The service is LightDM's `lightdm` (the greeter
+  and light-locker authenticate through it); sudo, su, login and polkit get
+  no message.
+- `prerm` (on `remove`) runs `pam-auth-update --package --remove validity-fprint`,
+  so removing the package takes the profile out of `common-*` before its
+  file goes. fprintd's profile is not re-enabled: the password keeps working,
+  and `pam-auth-update --enable fprintd` brings fingerprint login back.
+
+Switch to it, and back (one command each, so that pam-auth-update never has a
+conflict to report):
+
+```bash
+sudo pam-auth-update --disable fprintd --enable validity-fprint
+sudo pam-auth-update --disable validity-fprint --enable fprintd
+```
+
+`ci/e2e/run.sh` tests it with pamtester against the daemon on the emulated
+sensor, from the stock `common-*` with fprintd's profile enabled: the exact
+stack above; on `lightdm`, a match prints both messages and asks no password
+(a wrong password on stdin still succeeds); on another service, no message;
+a refused finger and pam_fprintd's 10 s timeout ask the password, the right
+one succeeds and a wrong one fails, on `lightdm` and elsewhere; the same with
+the daemon activated without a sensor, with no activatable daemon, and with
+`pam_fprintd.so` removed; `pam_setcred` succeeds after each success. Then
+disabling it gives back fprintd's `common-*` byte for byte, and the stock ones
+after `--disable` or prerm's `--remove`. The Debian package cycle checks the
+installed profile, enables it, and checks that `apt purge` restores
+`common-auth` byte for byte.
 
 ## Vendor files: validity-vendor
 
@@ -102,7 +169,8 @@ version, so a `Provides: fprintd` cannot replace it. The package depends on
 (`preinst`: `dpkg-divert --add --rename`, to
 `net.reactivated.Fprint.service.fprintd`, a name dbus-daemon ignores). fprintd's
 unit has no `[Install]` section, so once nothing activates it, it never starts.
-`postinst` stops a running fprintd (it would hold the bus name), `postrm`
+`postinst` stops a running fprintd (it would hold the bus name), `prerm`
+takes the optional PAM profile out of `common-*` (see above), `postrm`
 removes the diversion, which gives the file back to fprintd, and `purge`
 removes `/var/lib/validity`. The unit is not enabled: D-Bus activation and the
 udev rule start it, and an upgrade restarts it.
@@ -123,12 +191,15 @@ directory a package may use comes before fprintd's.
    to 127.0.0.1 (`/etc/hosts`, so it holds whatever environment the package
    manager gives its scripts): the install must succeed and say it is offline;
 3. check the files, the diversion and the unit (`systemd-analyze verify`);
+   check that `common-auth` is unchanged, then enable the `validity-fprint`
+   PAM profile (the purge must take it out again);
 4. start `/usr/libexec/validity-daemon --fake-sensor` and run `fprintd-list`
    against it (`no fingers enrolled`);
 5. let `fprintd-list` activate the installed daemon through D-Bus and systemd
    (`No devices available`: there is no sensor), and leave it running;
 6. `apt purge`: the daemon is stopped, the diversion is gone, fprintd's file is
-   back, and a second snapshot is identical to the first;
+   back, `common-auth` is byte-identical to the one before installation, and a
+   second snapshot is identical to the first;
 7. `fprintd-list` now activates fprintd itself.
 
 `--fake-sensor` is a hidden daemon option (not in `--help`) for this cycle: the

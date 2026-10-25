@@ -1,5 +1,12 @@
 #!/bin/sh
+# Takes the optional validity-fprint PAM profile out of /etc/pam.d/common-*
+# before its file goes away. The package never enables it; the administrator
+# may have (pam-auth-update --enable validity-fprint).
 set -e
+
+if [ "$1" = remove ]; then
+    pam-auth-update --package --remove validity-fprint
+fi
 
 #DEBHELPER#
 

@@ -103,6 +103,20 @@ The package never changes PAM. To log in with a finger, install `libpam-fprintd`
 and keep the fingerprint `sufficient`, never `required`, so that the password
 always works. Enrol with `fprintd-enroll`.
 
+On Debian, the package also ships an optional pam-auth-update profile,
+`validity-fprint`, off by default. It replaces libpam-fprintd's `fprintd`
+profile with the same fingerprint step and two messages on LightDM (in French
+for now): how to use the reader before the scan, and `<user> reconnu, appuyez
+sur Entrée.` after a match, because LightDM's greeters wait for Enter when no
+prompt was answered. Other services (sudo, su, ...) get no message. A refused
+finger, a timeout or a missing daemon falls through to the password exactly as
+with fprintd's profile:
+
+```bash
+sudo pam-auth-update --disable fprintd --enable validity-fprint   # switch to it
+sudo pam-auth-update --disable validity-fprint --enable fprintd   # and back
+```
+
 Details, other distributions and the CI cycle: [docs/packaging.md](docs/packaging.md).
 
 ## Building and testing
@@ -138,7 +152,10 @@ tested too. The checks are:
     `VALIDITY_TRACES` points to them, and never leave the machine.
 - **End to end:** in a Debian container, the daemon runs with a fake sensor and is
   driven by fprintd's own `fprintd-enroll/verify/list/delete`, `pam_fprintd` (through
-  `pamtester`) and a real polkit.
+  `pamtester`) and a real polkit. The `validity-fprint` PAM profile is enabled with
+  `pam-auth-update` over fprintd's and tested there: messages and no password on a
+  match, the password (right one only) on a refused finger, a timeout, no daemon or
+  no `pam_fprintd.so`, and `common-*` restored byte for byte when it is disabled.
 - **Fuzzing** of every parser and of the handshake: 30 s per target on each push,
   10 minutes weekly.
 - **Mutation testing** (cargo-mutants) of both crates: every mutant must make a test

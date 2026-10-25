@@ -139,6 +139,7 @@ FPRINTD_EXEC='Exec=/usr/lib(exec)?/fprintd'
 expect "$FPRINTD_EXEC" cat "$FPRINT_SERVICE"
 before=$(mktemp)
 snapshot >"$before"
+cp /etc/pam.d/common-auth /tmp/common-auth.before
 
 say "install $(basename "$pkg") (Lenovo's server unreachable on purpose)"
 offline
@@ -161,6 +162,17 @@ if [ "$init" = systemd ]; then
     systemd-analyze verify --man=no validity-daemon.service || fail "unit does not verify"
 else
     test -x /etc/init.d/validity-daemon || fail "OpenRC script missing"
+fi
+
+if [ "$distro" = debian ]; then
+    say "PAM: the validity-fprint profile is shipped, not enabled"
+    expect '^Default: no$' cat /usr/share/pam-configs/validity-fprint
+    cmp /etc/pam.d/common-auth /tmp/common-auth.before || fail "installing the package changed common-auth"
+    # Enabled by the administrator; the package's prerm must take it out on
+    # removal ("nothing left behind" compares every file, /etc/pam.d included).
+    pam-auth-update --enable validity-fprint
+    expect 'pam_fprintd\.so max-tries=1 timeout=10' cat /etc/pam.d/common-auth
+    expect 'pam_echo\.so %u reconnu, appuyez sur Entr' cat /etc/pam.d/common-auth
 fi
 
 say "how net.reactivated.Fprint is activated now"
@@ -238,6 +250,8 @@ say "fprintd has its activation back"
 expect "$FPRINTD_EXEC" cat "$FPRINT_SERVICE"
 if [ "$distro" = debian ]; then
     dpkg-divert --list | grep -q validity && fail "diversion left behind"
+    cmp /etc/pam.d/common-auth /tmp/common-auth.before || fail "common-auth differs after removal"
+    echo "    common-auth byte-identical to the one before installation"
     ls "$FPRINT_SERVICE".* 2>/dev/null && fail "diverted copy left behind"
 fi
 

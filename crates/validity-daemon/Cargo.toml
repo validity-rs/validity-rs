@@ -39,10 +39,14 @@ pam_fprintd, fprintd's tools and desktops keep working unchanged. \
 It replaces fprintd's daemon by taking over its D-Bus activation file only; \
 removing this package gives fprintd its file back. PAM is not configured: \
 enabling fingerprint login (always 'sufficient', never 'required') is the \
-administrator's choice. The Synaptics vendor files, which may not be \
+administrator's choice. An optional pam-auth-update profile, validity-fprint \
+(off by default), replaces libpam-fprintd's own profile and adds two \
+messages on LightDM: how to use the reader, and to press Enter once the \
+finger is recognised. \
+The Synaptics vendor files, which may not be \
 redistributed, are downloaded on installation by validity-vendor and checked \
 by SHA-256."""
-depends = "$auto, fprintd, polkitd, curl, ca-certificates"
+depends = "$auto, fprintd, polkitd, curl, ca-certificates, libpam-runtime"
 suggests = "libpam-fprintd"
 conflicts = "open-fprintd, python3-validity"
 maintainer-scripts = "../../packaging/debian/"
@@ -54,6 +58,7 @@ assets = [
     ["../../packaging/common/dbus-1/system-services/net.reactivated.Fprint.service", "usr/share/dbus-1/system-services/", "644"],
     ["../../packaging/common/dbus-1/system.d/validity-daemon.conf", "usr/share/dbus-1/system.d/", "644"],
     ["../../packaging/common/udev/60-validity-daemon.rules", "usr/lib/udev/rules.d/", "644"],
+    ["../../packaging/debian/pam-configs/validity-fprint", "usr/share/pam-configs/", "644"],
     ["../../packaging/common/man/validity-vendor.8", "usr/share/man/man8/", "644"],
     ["../../packaging/common/metainfo/io.github.validity_rs.validity_daemon.metainfo.xml", "usr/share/metainfo/", "644"],
     ["../../packaging/debian/lintian-overrides", "usr/share/lintian/overrides/validity-daemon", "644"],

@@ -55,6 +55,51 @@ elapsed_below() {
         || fail "took too long (limit ${limit}s): $*"
 }
 
+# The pam-auth-update profile the .deb ships (packaging/debian/pam-configs),
+# over the stock common-* files. pam_auth <service> <password>: pamtester's
+# authenticate and setcred for root (what LightDM calls), the password fed to
+# any prompt; output in $PAM_OUT, exit status in $PAM_RC.
+PASSWORD=e2e-Passw0rd
+GUIDE="Posez le doigt sur le lecteur d'empreintes (il s'allume). Sans doigt, le mot de passe est demandé après 10 secondes."
+MESSAGE="root reconnu, appuyez sur Entrée."
+pam_auth() {
+    PAM_RC=0
+    PAM_OUT=$(pamtester "$1" root authenticate setcred 2>&1 <<<"$2") || PAM_RC=$?
+    printf '%s\n' "$PAM_OUT" | sed 's/^/    /'
+}
+saw() { printf '%s\n' "$PAM_OUT" | grep -qF -- "$1" || fail "expected '$1'"; }
+not_saw() { if printf '%s\n' "$PAM_OUT" | grep -qF -- "$1"; then fail "unexpected '$1'"; fi; }
+granted() { [ "$PAM_RC" = 0 ] || fail "refused (exit $PAM_RC)"; saw "successfully authenticated"; }
+refused() { [ "$PAM_RC" != 0 ] || fail "granted"; saw "Authentication failure"; }
+# The guidance before the fingerprint: on LightDM only.
+guided() { if [ "$1" = lightdm ]; then saw "$GUIDE"; else not_saw "Posez"; fi; }
+# Fingerprint refused or unavailable: pam_unix asks, the right password only.
+password_only() {
+    local svc=$1 touch=${2:-}
+    [ -z "$touch" ] || touch_finger "$touch"
+    pam_auth "$svc" "$PASSWORD"
+    granted; saw "Password:"; not_saw "reconnu"; guided "$svc"
+    [ -z "$touch" ] || touch_finger "$touch"
+    pam_auth "$svc" wrong-password
+    refused; saw "Password:"; not_saw "reconnu"; guided "$svc"
+}
+# The five common-* files, saved under a name and compared byte for byte.
+snap_pam() { rm -rf "/tmp/pam-$1"; mkdir "/tmp/pam-$1"; cp -a /etc/pam.d/common-* "/tmp/pam-$1/"; }
+same_pam() {
+    local f
+    for f in /tmp/pam-"$1"/common-*; do
+        cmp "$f" "/etc/pam.d/$(basename "$f")" || fail "/etc/pam.d/$(basename "$f") differs from the '$1' state"
+    done
+    diff <(cd /etc/pam.d && printf '%s\n' common-*) <(cd "/tmp/pam-$1" && printf '%s\n' common-*) \
+        || fail "common-* files added or removed"
+    echo "    common-* byte-identical to the '$1' state"
+}
+no_fprint_owner() { ! has_owner net.reactivated.Fprint; }
+owner_pid() {
+    dbus-send --system --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+        org.freedesktop.DBus.GetConnectionUnixProcessID "string:$1" | awk '/uint32/ { print $2 }'
+}
+
 say "build"
 cargo build -q -p validity-daemon --example fake_daemon --bin validity-daemon
 FAKE=$PWD/target/debug/examples/fake_daemon
@@ -133,6 +178,57 @@ expect "Authentication failure" pamtester validity-e2e root authenticate
 touch_finger 1
 expect "successfully authenticated" pamtester validity-e2e root authenticate
 
+say "pam-auth-update: validity-fprint over the T480's setup (fprintd's profile on)"
+export DEBIAN_FRONTEND=noninteractive
+if grep -q pam_fprintd /etc/pam.d/common-auth; then fail "the image's common-auth already has pam_fprintd"; fi
+snap_pam stock
+pam-auth-update --enable fprintd
+expect '^auth[[:space:]]+\[success=2 default=ignore\][[:space:]]+pam_fprintd\.so max-tries=1 timeout=10' cat /etc/pam.d/common-auth
+snap_pam fprintd
+install -m 0644 packaging/debian/pam-configs/validity-fprint /usr/share/pam-configs/
+pam-auth-update --package
+same_pam fprintd
+pam-auth-update --disable fprintd --enable validity-fprint
+# The whole stack, exactly: a failed or unavailable fingerprint skips the
+# message and reaches pam_unix as before; only a match goes past it. The
+# guidance line before pam_fprintd only jumps or is ignored: it changes no result.
+diff -u <(printf 'auth\t%s\n' \
+    $'[success=ignore default=1]\tpam_succeed_if.so quiet service = lightdm' \
+    "[default=ignore]"$'\t'"pam_echo.so $GUIDE" \
+    $'[success=ok default=2]\tpam_fprintd.so max-tries=1 timeout=10' \
+    $'[success=ok default=3]\tpam_succeed_if.so quiet service = lightdm' \
+    $'[default=2]\tpam_echo.so %u reconnu, appuyez sur Entrée.' \
+    $'[success=1 default=ignore]\tpam_unix.so nullok try_first_pass' \
+    $'requisite\t\t\tpam_deny.so' \
+    $'required\t\t\tpam_permit.so') <(grep '^auth' /etc/pam.d/common-auth) \
+    || fail "unexpected common-auth stack"
+grep '^auth' /etc/pam.d/common-auth | sed 's/^/    /'
+snap_pam ours
+echo "root:$PASSWORD" | chpasswd
+for svc in lightdm validity-other; do
+    printf '@include common-auth\naccount required pam_permit.so\n' >"/etc/pam.d/$svc"
+done
+
+say "(a) lightdm, matching finger: the guidance, the message, no password asked"
+touch_finger 1
+# A wrong password on stdin: had pam_unix been asked, this would fail.
+pam_auth lightdm wrong-password
+granted; saw "$GUIDE"; saw "$MESSAGE"; not_saw "Password:"
+[ "$(ctl_pending)" = 0 ] || fail "touch not consumed"
+
+say "(a) another service (sudo, su...), matching finger: no message, no password"
+touch_finger 1
+pam_auth validity-other wrong-password
+granted; not_saw "reconnu"; not_saw "Posez"; not_saw "Password:"
+
+say "(b) lightdm, unknown finger: the password, right one only"
+password_only lightdm 9
+say "(b) another service, unknown finger: the password, right one only"
+password_only validity-other 9
+say "(b) lightdm, no finger (pam_fprintd's 10 s timeout): the password, right one only"
+password_only lightdm
+[ "$(ctl_pending)" = 0 ] || fail "touches left over"
+
 say "password fallback: sensor unplugged"
 ctl Unplug
 # Lost sensors usually come back (re-enumeration): listed for a few seconds...
@@ -158,5 +254,40 @@ trap - EXIT
 # there, so pam_fprintd gives up at once.
 elapsed_below 5 expect "Authentication failure" pamtester validity-e2e root authenticate
 expect "No devices available" fprintd-list root
+
+say "(c) daemon without a sensor (D-Bus activated): the password, right one only"
+password_only lightdm
+
+say "(c) no daemon at all (not activatable): the password, right one only"
+mv /usr/share/dbus-1/system-services/net.reactivated.Fprint.service /tmp/fprint.service.away
+dbus-send --system --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+    org.freedesktop.DBus.ReloadConfig >/dev/null
+if has_owner net.reactivated.Fprint; then kill "$(owner_pid net.reactivated.Fprint)"; fi
+wait_for no_fprint_owner
+elapsed_below 5 pam_auth lightdm "$PASSWORD"
+granted; saw "Password:"; not_saw "reconnu"; guided lightdm
+password_only lightdm
+if has_owner net.reactivated.Fprint; then fail "something serves net.reactivated.Fprint"; fi
+mv /tmp/fprint.service.away /usr/share/dbus-1/system-services/net.reactivated.Fprint.service
+
+say "(c) pam_fprintd.so missing (libpam-fprintd removed): the password, right one only"
+module=$(find /usr/lib -name pam_fprintd.so | head -1)
+[ -n "$module" ] || fail "pam_fprintd.so not found"
+mv "$module" /tmp/pam_fprintd.so.away
+password_only lightdm
+mv /tmp/pam_fprintd.so.away "$module"
+
+say "pam-auth-update: back to fprintd's profile, then to the stock files, byte for byte"
+pam-auth-update --disable validity-fprint --enable fprintd
+same_pam fprintd
+# Enabled alone, it replaces fprintd's (Conflicts) and gives the same files.
+pam-auth-update --enable validity-fprint
+same_pam ours
+pam-auth-update --disable validity-fprint
+same_pam stock
+# What the package's prerm runs on removal.
+pam-auth-update --enable validity-fprint
+pam-auth-update --package --remove validity-fprint
+same_pam stock
 
 say "e2e: OK"
