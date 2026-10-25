@@ -611,9 +611,9 @@ fn claim_enroll_verify_delete_release() {
         assert_eq!(err_name(d.release().await), CLAIM);
         assert_eq!(d.num_enroll_stages().await.unwrap(), 6);
         assert_eq!(d.scan_type().await.unwrap(), "press");
-        assert_eq!(
-            d.name().await.unwrap(),
-            "Synaptics/Validity fingerprint sensor (06cb:009a)"
+        assert!(
+            ["the fingerprint reader", "le lecteur d'empreintes"]
+                .contains(&d.name().await.unwrap().as_str())
         );
         assert!(!d.finger_present().await.unwrap());
         assert!(!d.finger_needed().await.unwrap());

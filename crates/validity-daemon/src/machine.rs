@@ -207,7 +207,21 @@ pub struct Machine {
     next_claim: u64,
 }
 
-pub const DEFAULT_NAME: &str = "Synaptics/Validity match-on-chip sensor";
+/// The device name in the daemon's language (POSIX order: `LC_ALL`, then
+/// `LC_MESSAGES`, then `LANG`); English unless that is French.
+pub fn default_name() -> &'static str {
+    let lang = ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .find_map(|v| std::env::var(v).ok().filter(|s| !s.is_empty()));
+    name_for(lang.as_deref())
+}
+
+fn name_for(lang: Option<&str>) -> &'static str {
+    match lang {
+        Some(l) if l.starts_with("fr") => "le lecteur d'empreintes",
+        _ => "the fingerprint reader",
+    }
+}
 
 fn kind_busy(kind: ActionKind) -> &'static str {
     match kind {
@@ -227,7 +241,7 @@ impl Machine {
     pub fn new() -> Self {
         Machine {
             device: DeviceState::Opening,
-            name: DEFAULT_NAME.to_string(),
+            name: default_name().to_string(),
             prints: None,
             claim: None,
             finger_present: false,
@@ -594,6 +608,15 @@ impl Machine {
 mod tests {
     use super::*;
     use crate::users::sid_for_uid;
+
+    #[test]
+    fn the_name_is_a_plain_phrase_in_the_daemons_language() {
+        assert_eq!(name_for(Some("fr_FR.UTF-8")), "le lecteur d'empreintes");
+        assert_eq!(name_for(Some("fr_BE.UTF-8")), "le lecteur d'empreintes");
+        assert_eq!(name_for(Some("en_US.UTF-8")), "the fingerprint reader");
+        assert_eq!(name_for(Some("C")), "the fingerprint reader");
+        assert_eq!(name_for(None), "the fingerprint reader");
+    }
 
     fn alice() -> (User, Sid) {
         (

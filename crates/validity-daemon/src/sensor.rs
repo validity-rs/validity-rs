@@ -60,12 +60,11 @@ pub trait Hardware: Send + 'static {
     fn watch(&mut self, notify: Box<dyn Fn() + Send + Sync>) -> bool;
 }
 
-/// Name for the `name` property.
-pub fn device_name(id: Option<UsbId>) -> String {
-    match id {
-        Some((v, p)) => format!("Synaptics/Validity fingerprint sensor ({v:04x}:{p:04x})"),
-        None => crate::machine::DEFAULT_NAME.to_string(),
-    }
+/// Name for the `name` property. `pam_fprintd` shows it to the user in its prompt
+/// ("Place your right index finger on %s"), so it is a short, plain phrase in the
+/// daemon's own language, not a hardware id: the USB id is in the log.
+pub fn device_name(_id: Option<UsbId>) -> String {
+    crate::machine::default_name().to_string()
 }
 
 /// Why opening a session failed.

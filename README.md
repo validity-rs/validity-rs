@@ -107,7 +107,7 @@ On Debian, the package also ships an optional pam-auth-update profile,
 `validity-fprint`, off by default, in place of libpam-fprintd's `fprintd`
 profile. On LightDM (greeter and light-locker) the password comes first, as
 without a reader: the right password logs in at once; an empty one (just
-Enter) shows `Posez le doigt sur le lecteur.` and waits 30 s for a finger,
+Enter) shows pam_fprintd's prompt and waits 30 s for a finger,
 then `<user> reconnu, appuyez sur Entrée.` on a match, a failure otherwise
 (messages in French for now). PAM cannot tell an empty password from a wrong
 one, so a wrong password leads to the finger too. Other services (sudo, su,

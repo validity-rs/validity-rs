@@ -53,8 +53,9 @@ It takes the place of libpam-fprintd's `fprintd` profile (same `Priority: 260`,
 
 - **LightDM** (service `lightdm`: the greeter and light-locker): the password
   first, as without fingerprint support. The right password logs in at once
-  and the sensor is not asked. An empty password (just Enter) shows one line,
-  `Posez le doigt sur le lecteur.`, then waits up to 30 s for a finger: a
+  and the sensor is not asked. An empty password (just Enter) shows
+  pam_fprintd's one-line prompt (`Placez votre index droit sur le lecteur
+  d'empreintes`), then waits up to 30 s for a finger: a
   match shows `<user> reconnu, appuyez sur Entrée.` (LightDM's greeters wait
   for Enter after an authentication that answered no prompt) and logs in; no
   match, no finger, no daemon or no sensor fail, and the greeter asks the
@@ -65,9 +66,8 @@ It takes the place of libpam-fprintd's `fprintd` profile (same `Priority: 260`,
 Enabled, `common-auth` reads:
 
 ```
-auth  [success=ignore default=4]    pam_succeed_if.so quiet service = lightdm
-auth  [success=6 default=ignore]    pam_unix.so nullok
-auth  [default=ignore]              pam_echo.so Posez le doigt sur le lecteur.
+auth  [success=ignore default=3]    pam_succeed_if.so quiet service = lightdm
+auth  [success=5 default=ignore]    pam_unix.so nullok
 auth  [success=ok default=die]      pam_fprintd.so max-tries=1 timeout=30
 auth  [default=3]                   pam_echo.so %u reconnu, appuyez sur Entrée.
 auth  [success=2 default=ignore]    pam_fprintd.so max-tries=1 timeout=10

@@ -60,7 +60,8 @@ elapsed_below() {
 # authenticate and setcred for root (what LightDM calls), the password fed to
 # any prompt; output in $PAM_OUT, exit status in $PAM_RC.
 PASSWORD=e2e-Passw0rd
-GUIDE="Posez le doigt sur le lecteur."
+# pam_fprintd's own prompt, with the daemon's device name (English here).
+GUIDE="finger on the fingerprint reader"
 MESSAGE="root reconnu, appuyez sur Entrée."
 pam_auth() {
     PAM_RC=0
@@ -208,9 +209,8 @@ pam-auth-update --disable fprintd --enable validity-fprint
 # then the finger, whose failure ends the stack (die). Other services jump
 # straight to fprintd's own line, then pam_unix, as with fprintd's profile.
 diff -u <(printf 'auth\t%s\n' \
-    $'[success=ignore default=4]\tpam_succeed_if.so quiet service = lightdm' \
-    $'[success=6 default=ignore]\tpam_unix.so nullok' \
-    $'[default=ignore]\tpam_echo.so Posez le doigt sur le lecteur.' \
+    $'[success=ignore default=3]\tpam_succeed_if.so quiet service = lightdm' \
+    $'[success=5 default=ignore]\tpam_unix.so nullok' \
     $'[success=ok default=die]\tpam_fprintd.so max-tries=1 timeout=30' \
     $'[default=3]\tpam_echo.so %u reconnu, appuyez sur Entrée.' \
     $'[success=2 default=ignore]\tpam_fprintd.so max-tries=1 timeout=10' \
@@ -229,7 +229,7 @@ say "lightdm: the right password at once, the sensor never asked"
 lightdm_password
 [ "$(ctl_pending)" = 0 ] || fail "touches left over"
 
-say "lightdm: empty password, matching finger: one line, the message, success"
+say "lightdm: empty password, matching finger: pam_fprintd's prompt, the message, success"
 touch_finger 1
 pam_auth lightdm ""
 granted; prompts 1; saw "$GUIDE"; saw "$MESSAGE"
