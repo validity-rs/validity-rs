@@ -137,7 +137,10 @@ phase_upgrade() {
     v2=$(version validity-daemon)
     echo "    validity-daemon $v -> $v2"
     case "$v2" in *-2"$SUFFIX") ;; *) fail "not upgraded: $v2" ;; esac
-    expect 'validity-daemon' tail -20 /var/log/unattended-upgrades/unattended-upgrades.log
+    # unattended-upgrades' own record of the dpkg run (its main log ends with
+    # pinning details on Ubuntu, not with the package).
+    expect "Unpacking validity-daemon \(.*-2$SUFFIX\) over \(.*-1$SUFFIX\)" \
+        cat /var/log/unattended-upgrades/unattended-upgrades-dpkg.log
 
     say "the running daemon was restarted on the new version"
     expect '^active$' systemctl is-active validity-daemon.service
