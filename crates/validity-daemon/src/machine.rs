@@ -210,14 +210,14 @@ pub struct Machine {
 /// The device name in the daemon's language (POSIX order: `LC_ALL`, then
 /// `LC_MESSAGES`, then `LANG`); English unless that is French.
 pub fn default_name() -> &'static str {
-    let lang = ["LC_ALL", "LC_MESSAGES", "LANG"]
-        .iter()
-        .find_map(|v| std::env::var(v).ok().filter(|s| !s.is_empty()));
-    name_for(lang.as_deref())
+    name_for(|v| std::env::var(v).ok())
 }
 
-fn name_for(lang: Option<&str>) -> &'static str {
-    match lang {
+fn name_for(var: impl Fn(&str) -> Option<String>) -> &'static str {
+    let lang = ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .find_map(|v| var(v).filter(|s| !s.is_empty()));
+    match lang.as_deref() {
         Some(l) if l.starts_with("fr") => "le lecteur d'empreintes",
         _ => "the fingerprint reader",
     }
@@ -611,11 +611,29 @@ mod tests {
 
     #[test]
     fn the_name_is_a_plain_phrase_in_the_daemons_language() {
-        assert_eq!(name_for(Some("fr_FR.UTF-8")), "le lecteur d'empreintes");
-        assert_eq!(name_for(Some("fr_BE.UTF-8")), "le lecteur d'empreintes");
-        assert_eq!(name_for(Some("en_US.UTF-8")), "the fingerprint reader");
-        assert_eq!(name_for(Some("C")), "the fingerprint reader");
-        assert_eq!(name_for(None), "the fingerprint reader");
+        fn env(vars: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+            move |v| {
+                vars.iter()
+                    .find(|(k, _)| *k == v)
+                    .map(|(_, x)| x.to_string())
+            }
+        }
+        let fr = "le lecteur d'empreintes";
+        let en = "the fingerprint reader";
+        assert_eq!(name_for(env(&[("LANG", "fr_FR.UTF-8")])), fr);
+        assert_eq!(name_for(env(&[("LANG", "fr_BE.UTF-8")])), fr);
+        assert_eq!(name_for(env(&[("LANG", "en_US.UTF-8")])), en);
+        assert_eq!(name_for(env(&[("LANG", "C")])), en);
+        assert_eq!(name_for(env(&[])), en);
+        // POSIX order, and an empty variable does not count.
+        assert_eq!(
+            name_for(env(&[("LC_ALL", "en_US.UTF-8"), ("LANG", "fr_FR.UTF-8")])),
+            en
+        );
+        assert_eq!(
+            name_for(env(&[("LC_ALL", ""), ("LC_MESSAGES", "fr_FR.UTF-8")])),
+            fr
+        );
     }
 
     fn alice() -> (User, Sid) {

@@ -86,7 +86,7 @@ lightdm_refused() {
     local pass=$1 touch=${2:-}
     [ -z "$touch" ] || touch_finger "$touch"
     pam_auth lightdm "$pass"
-    refused; prompts 1; saw "$GUIDE"
+    refused; prompts 1
 }
 # Other services, as with fprintd's profile: the finger first, then the
 # password, the right one only, and none of our messages.
@@ -236,12 +236,12 @@ granted; prompts 1; saw "$GUIDE"; saw "$MESSAGE"
 [ "$(ctl_pending)" = 0 ] || fail "touch not consumed"
 
 say "lightdm: empty password, unknown finger: failure"
-lightdm_refused "" 9
+lightdm_refused "" 9; saw "$GUIDE"
 say "lightdm: empty password, no finger (30 s): failure"
 # pam_fprintd's 30 s and the sensor's finger deadline (30 s) race: either way, a failure.
-lightdm_refused ""
+lightdm_refused ""; saw "$GUIDE"
 say "lightdm: wrong password, unknown finger: failure"
-lightdm_refused wrong-password 9
+lightdm_refused wrong-password 9; saw "$GUIDE"
 say "lightdm: wrong password, then a matching finger: success (PAM cannot tell empty from wrong)"
 touch_finger 1
 pam_auth lightdm wrong-password
