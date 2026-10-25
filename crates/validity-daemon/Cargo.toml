@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-validity-proto = { path = "../validity-proto", version = "0.1.0" }
+validity-proto = { path = "../validity-proto", version = "0.1.1" }
 futures-core = "0.3.34"
 nix = { version = "0.31.3", default-features = false, features = ["user"] }
 log = "0.4.34"

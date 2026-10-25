@@ -781,7 +781,7 @@ dependencies = [
 
 [[package]]
 name = "pam-validity"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "futures-core",
  "zbus",
@@ -1257,7 +1257,7 @@ dependencies = [
 
 [[package]]
 name = "validity-daemon"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "futures-core",
  "log",
@@ -1272,7 +1272,7 @@ dependencies = [
 
 [[package]]
 name = "validity-proto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aes",
  "cbc",
@@ -1288,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "validity-vendor"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "crc32fast",
  "inno",
