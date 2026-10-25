@@ -156,7 +156,7 @@ job_fuzz() {
 # makes the tests hang is killed after cargo-mutants' timeout and counts as caught:
 # its exit status 3 (timeouts, which it reports ahead of missed mutants) passes
 # only when mutants.out/missed.txt is empty. Results: mutants.out/.
-MUTANTS_CRATES=(validity-proto validity-daemon)
+MUTANTS_CRATES=(validity-proto validity-daemon pam-validity)
 mutants_run() {
     local args=() p rc=0
     for p in "${MUTANTS_CRATES[@]}"; do args+=(-p "$p"); done

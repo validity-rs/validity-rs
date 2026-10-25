@@ -780,6 +780,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pam-validity"
+version = "0.1.0"
+dependencies = [
+ "futures-core",
+ "zbus",
+ "zruntime",
+]
+
+[[package]]
 name = "pem-rfc7468"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

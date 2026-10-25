@@ -1,0 +1,42 @@
+[package]
+name = "pam-validity"
+description = "PAM module for fingerprint login through net.reactivated.Fprint (validity-daemon or fprintd), with its messages in the session's language"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# Shipped in validity-daemon's .deb as pam_validity.so, not as a crate.
+publish = false
+
+[lib]
+# cdylib: the module libpam loads (libpam_validity.so, installed as
+# pam_validity.so). rlib: what the unit tests and cargo build on.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+futures-core = "0.3.34"
+# zbus 6 is async only: the module drives it with zbus::block_on for the
+# length of one pam_sm_authenticate call.
+zbus = { version = "6.1.0", default-features = false, features = ["default-rt", "proxy"] }
+zruntime = { version = "0.2.1", default-features = false, features = ["runtime", "helper"] }
+
+[dev-dependencies]
+# The fake fprintd of tests/pam.rs serves objects.
+zbus = { version = "6.1.0", default-features = false, features = ["default-rt", "proxy", "service"] }
+
+# The workspace lints, except that unsafe code is denied rather than forbidden:
+# src/ffi.rs, the C side of the module, allows it (and only it, with a
+# SAFETY comment on each block); so do the tests that drive the module
+# through libpam. A crate with `lints.workspace = true` cannot change one lint.
+[lints.rust]
+warnings = "deny"
+unsafe_code = "deny"
+missing_debug_implementations = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+
+[lints.rustdoc]
+all = { level = "deny", priority = -1 }

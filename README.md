@@ -126,13 +126,17 @@ always works. Enrol with `fprintd-enroll`.
 
 On Debian and Ubuntu, the package also ships an optional pam-auth-update profile,
 `validity-fprint`, off by default, in place of libpam-fprintd's `fprintd`
-profile. On LightDM (greeter and light-locker) the password comes first, as
-without a reader: the right password logs in at once; an empty one (just
-Enter) shows pam_fprintd's prompt and waits 30 s for a finger,
-then `<user> reconnu, appuyez sur Entrée.` on a match, a failure otherwise
-(messages in French for now). PAM cannot tell an empty password from a wrong
-one, so a wrong password leads to the finger too. Other services (sudo, su,
-...) keep fprintd's behaviour: the finger first, then the password.
+profile, and its PAM module, `pam_validity.so` (`crates/pam-validity`), which
+speaks the session's language, French or English, never both (pam_fprintd
+follows the application's `setlocale`, which LightDM never calls, so it spoke
+English to a French greeter). On LightDM (greeter and light-locker) the password
+comes first, as without a reader: the right password logs in at once; an empty
+one (just Enter) shows the prompt (`Posez votre index droit sur le lecteur
+d'empreintes.`) and waits 30 s for a finger, then `<user> reconnu, appuyez sur
+Entrée.` on a match, a failure otherwise. PAM cannot tell an empty password from
+a wrong one, so a wrong password leads to the finger too. Other services (sudo,
+su, ...) keep fprintd's behaviour: the finger first, then the password.
+libpam-fprintd is not needed by the profile (and left alone if installed).
 
 ```bash
 sudo pam-auth-update --disable fprintd --enable validity-fprint   # switch to it
@@ -175,10 +179,13 @@ Arch Linux and Alpine are tested too. The checks are:
 - **End to end:** in a Debian container, the daemon runs with a fake sensor and is
   driven by fprintd's own `fprintd-enroll/verify/list/delete`, `pam_fprintd` (through
   `pamtester`) and a real polkit. The `validity-fprint` PAM profile is enabled with
-  `pam-auth-update` over fprintd's and tested there: on LightDM the password first,
-  the finger after an empty one; elsewhere the finger then the password; passwords
-  still work with no daemon or no `pam_fprintd.so`; `common-*` restored byte for
-  byte when it is disabled.
+  `pam-auth-update` over fprintd's and tested there with `pam_validity.so`: on
+  LightDM the password first, the finger after an empty one; elsewhere the finger
+  then the password; English or French only, from the locale; passwords still work
+  with no daemon or no `pam_validity.so`, the finger without `pam_fprintd.so`;
+  `common-*` restored byte for byte when it is disabled. `pam_validity.so` is also
+  tested through libpam itself (`crates/pam-validity/tests/pam.rs`), against a
+  scripted fprintd on a private bus.
 - **Fuzzing** of every parser and of the handshake: 30 s per target on each push,
   10 minutes weekly.
 - **Mutation testing** (cargo-mutants) of both crates: every mutant must make a test

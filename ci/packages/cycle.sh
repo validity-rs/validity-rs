@@ -176,8 +176,10 @@ if [ -n "$deb" ]; then
     # Enabled by the administrator; the package's prerm must take it out on
     # removal ("nothing left behind" compares every file, /etc/pam.d included).
     pam-auth-update --enable validity-fprint
-    expect 'pam_fprintd\.so max-tries=1 timeout=10' cat /etc/pam.d/common-auth
-    expect 'pam_echo\.so %u reconnu, appuyez sur Entr' cat /etc/pam.d/common-auth
+    expect 'pam_validity\.so max-tries=1 timeout=30 confirm' cat /etc/pam.d/common-auth
+    expect 'pam_validity\.so max-tries=1 timeout=10' cat /etc/pam.d/common-auth
+    # The profile's module, where libpam looks for it.
+    test -f /usr/lib/x86_64-linux-gnu/security/pam_validity.so || fail "pam_validity.so not installed"
 fi
 
 say "how net.reactivated.Fprint is activated now"

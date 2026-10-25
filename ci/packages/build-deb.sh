@@ -11,7 +11,7 @@ rm -rf "/build/$name"
 tar -xzf "$tarball" -C /build
 cd "/build/$name"
 
-cargo build --release --offline --locked -p validity-daemon -p validity-vendor
+cargo build --release --offline --locked -p validity-daemon -p validity-vendor -p pam-validity
 mkdir -p "$out"
 cargo deb -p validity-daemon --no-build --offline --locked \
     ${revision:+--deb-revision "$revision"} --output "$out"

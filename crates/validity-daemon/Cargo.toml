@@ -40,14 +40,15 @@ It replaces fprintd's daemon by taking over its D-Bus activation file only; \
 removing this package gives fprintd its file back. PAM is not configured: \
 enabling fingerprint login (always 'sufficient', never 'required') is the \
 administrator's choice. An optional pam-auth-update profile, validity-fprint \
-(off by default), replaces libpam-fprintd's own profile: on LightDM the \
-password comes first and an empty one asks for the finger, saying when to \
-press Enter; other services keep the finger first. \
+(off by default), replaces libpam-fprintd's own profile with this \
+package's PAM module, pam_validity.so, whose messages follow the \
+session's language (English or French): on LightDM the password comes \
+first and an empty one asks for the finger, saying when to press Enter; \
+other services keep the finger first. \
 The Synaptics vendor files, which may not be \
 redistributed, are downloaded on installation by validity-vendor and checked \
 by SHA-256."""
 depends = "$auto, fprintd, polkitd, curl, ca-certificates, libpam-runtime"
-suggests = "libpam-fprintd"
 conflicts = "open-fprintd, python3-validity"
 maintainer-scripts = "../../packaging/debian/"
 changelog = "../../packaging/debian/changelog"
@@ -59,6 +60,9 @@ assets = [
     ["../../packaging/common/dbus-1/system.d/validity-daemon.conf", "usr/share/dbus-1/system.d/", "644"],
     ["../../packaging/common/udev/60-validity-daemon.rules", "usr/lib/udev/rules.d/", "644"],
     ["../../packaging/debian/pam-configs/validity-fprint", "usr/share/pam-configs/", "644"],
+    # The profile's module (crates/pam-validity). The multiarch directory is
+    # amd64's: the supported sensors are in x86-64 laptops only.
+    ["target/release/libpam_validity.so", "usr/lib/x86_64-linux-gnu/security/pam_validity.so", "644"],
     ["../../packaging/common/man/validity-vendor.8", "usr/share/man/man8/", "644"],
     ["../../packaging/common/metainfo/io.github.validity_rs.validity_daemon.metainfo.xml", "usr/share/metainfo/", "644"],
     ["../../packaging/debian/lintian-overrides", "usr/share/lintian/overrides/validity-daemon", "644"],

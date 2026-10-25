@@ -2,7 +2,8 @@
 # End-to-end test, run as root in the e2e container (docker/Dockerfile.e2e):
 # a system bus with polkit, validity-daemon's service with the emulated sensor
 # (examples/fake_daemon.rs), and the stock clients in front of it:
-# fprintd-list / -enroll / -verify / -delete and pam_fprintd through pamtester.
+# fprintd-list / -enroll / -verify / -delete and pam_fprintd through pamtester;
+# then our PAM module, pam_validity, and the validity-fprint profile built on it.
 #
 #   ci/run.sh e2e        (builds the image and runs this inside it)
 set -euo pipefail
@@ -58,28 +59,35 @@ elapsed_below() {
 # The pam-auth-update profile the .deb ships (packaging/debian/pam-configs),
 # over the stock common-* files. pam_auth <service> <password>: pamtester's
 # authenticate and setcred for root (what LightDM calls), the password fed to
-# any prompt; output in $PAM_OUT, exit status in $PAM_RC.
+# any prompt, in the locale $PAM_LANG (English unless set); output in
+# $PAM_OUT, exit status in $PAM_RC.
 PASSWORD=e2e-Passw0rd
-# pam_fprintd's own prompt, with the daemon's device name (English here).
-GUIDE="finger on the fingerprint reader"
-MESSAGE="root reconnu, appuyez sur Entrée."
+# pam_validity's prompt (root has one finger enrolled) and confirmation.
+GUIDE="Place your right index finger on the fingerprint reader."
+MESSAGE="root recognized, press Enter."
+GUIDE_FR="Posez votre index droit sur le lecteur d'empreintes."
+MESSAGE_FR="root reconnu, appuyez sur Entrée."
 pam_auth() {
     PAM_RC=0
-    PAM_OUT=$(pamtester "$1" root authenticate setcred 2>&1 <<<"$2") || PAM_RC=$?
+    PAM_OUT=$(env LC_ALL= LC_MESSAGES= LANG="${PAM_LANG:-en_US.UTF-8}" \
+        pamtester "$1" root authenticate setcred 2>&1 <<<"$2") || PAM_RC=$?
     printf '%s\n' "$PAM_OUT" | sed 's/^/    /'
 }
 saw() { printf '%s\n' "$PAM_OUT" | grep -qF -- "$1" || fail "expected '$1'"; }
 not_saw() { if printf '%s\n' "$PAM_OUT" | grep -qF -- "$1"; then fail "unexpected '$1'"; fi; }
 granted() { [ "$PAM_RC" = 0 ] || fail "refused (exit $PAM_RC)"; saw "successfully authenticated"; }
-# Any failure code: pam_unix gives "Authentication failure", the finger after
-# a password on LightDM gives pam_fprintd's own (die), e.g. "Have exhausted
-# maximum number of retries" for a refused finger.
-refused() { [ "$PAM_RC" != 0 ] || fail "granted"; not_saw "successfully authenticated"; not_saw "reconnu"; }
+# Any failure code: pam_unix's, or pam_validity's for the finger after a
+# password on LightDM (die).
+refused() { [ "$PAM_RC" != 0 ] || fail "granted"; not_saw "successfully authenticated"; no_confirm; }
+no_confirm() { not_saw "reconnu"; not_saw "recognized"; }
+# Our messages in one language only.
+english_only() { not_saw "Posez"; not_saw "lecteur"; not_saw "reconnu"; not_saw "Entrée"; }
+french_only() { not_saw "Place your"; not_saw "fingerprint reader"; not_saw "recognized"; not_saw "press Enter"; }
 prompts() { [ "$(printf '%s\n' "$PAM_OUT" | grep -o 'Password:' | wc -l)" = "$1" ] || fail "expected $1 password prompt(s)"; }
 # LightDM, the password first: the right one at once, the sensor untouched.
 lightdm_password() {
     elapsed_below 3 pam_auth lightdm "$PASSWORD"
-    granted; prompts 1; not_saw "$GUIDE"; not_saw "reconnu"; not_saw "finger"
+    granted; prompts 1; not_saw "$GUIDE"; no_confirm; not_saw "finger"
 }
 # LightDM, empty (or wrong) password, then a refused or missing finger: failure.
 lightdm_refused() {
@@ -94,10 +102,10 @@ other_password_only() {
     local touch=${1:-}
     [ -z "$touch" ] || touch_finger "$touch"
     pam_auth validity-other "$PASSWORD"
-    granted; prompts 1; not_saw "Posez"; not_saw "reconnu"
+    granted; prompts 1; english_only; no_confirm
     [ -z "$touch" ] || touch_finger "$touch"
     pam_auth validity-other wrong-password
-    refused; prompts 1; not_saw "Posez"; saw "Authentication failure"
+    refused; prompts 1; english_only; saw "Authentication failure"
 }
 # The five common-* files, saved under a name and compared byte for byte.
 snap_pam() { rm -rf "/tmp/pam-$1"; mkdir "/tmp/pam-$1"; cp -a /etc/pam.d/common-* "/tmp/pam-$1/"; }
@@ -119,6 +127,11 @@ owner_pid() {
 say "build"
 cargo build -q -p validity-daemon --example fake_daemon --bin validity-daemon
 FAKE=$PWD/target/debug/examples/fake_daemon
+cargo build -q -p pam-validity
+# Where the .deb puts it.
+SECURITY=/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || gcc -print-multiarch)/security
+[ -f "$SECURITY/pam_unix.so" ] || fail "no pam_unix.so in $SECURITY"
+install -m 0644 target/debug/libpam_validity.so "$SECURITY/pam_validity.so"
 
 say "system bus and polkit"
 # The daemon's own bus policy (as packaged), and access to the emulator's
@@ -194,6 +207,20 @@ expect "Authentication failure" pamtester validity-e2e root authenticate
 touch_finger 1
 expect "successfully authenticated" pamtester validity-e2e root authenticate
 
+say "pam_validity through pamtester"
+cat >/etc/pam.d/validity-e2e-ours <<'PAM'
+auth sufficient pam_validity.so max-tries=1 timeout=10
+auth required pam_deny.so
+account required pam_permit.so
+PAM
+touch_finger 1
+pam_auth validity-e2e-ours ""
+granted; saw "$GUIDE"; no_confirm; english_only
+touch_finger 9
+pam_auth validity-e2e-ours ""
+refused; saw "$GUIDE"; saw "Authentication failure"
+[ "$(ctl_pending)" = 0 ] || fail "touches left over"
+
 say "pam-auth-update: validity-fprint over the T480's setup (fprintd's profile on)"
 export DEBIAN_FRONTEND=noninteractive
 if grep -q pam_fprintd /etc/pam.d/common-auth; then fail "the image's common-auth already has pam_fprintd"; fi
@@ -207,13 +234,12 @@ same_pam fprintd
 pam-auth-update --disable fprintd --enable validity-fprint
 # The whole stack, exactly. LightDM: pam_unix first (success: pam_permit),
 # then the finger, whose failure ends the stack (die). Other services jump
-# straight to fprintd's own line, then pam_unix, as with fprintd's profile.
+# straight to the finger first, then pam_unix, as with fprintd's profile.
 diff -u <(printf 'auth\t%s\n' \
-    $'[success=ignore default=3]\tpam_succeed_if.so quiet service = lightdm' \
-    $'[success=5 default=ignore]\tpam_unix.so nullok' \
-    $'[success=ok default=die]\tpam_fprintd.so max-tries=1 timeout=30' \
-    $'[default=3]\tpam_echo.so %u reconnu, appuyez sur Entrée.' \
-    $'[success=2 default=ignore]\tpam_fprintd.so max-tries=1 timeout=10' \
+    $'[success=ignore default=2]\tpam_succeed_if.so quiet service = lightdm' \
+    $'[success=4 default=ignore]\tpam_unix.so nullok' \
+    $'[success=3 default=die]\tpam_validity.so max-tries=1 timeout=30 confirm' \
+    $'[success=2 default=ignore]\tpam_validity.so max-tries=1 timeout=10' \
     $'[success=1 default=ignore]\tpam_unix.so nullok try_first_pass' \
     $'requisite\t\t\tpam_deny.so' \
     $'required\t\t\tpam_permit.so') <(grep '^auth' /etc/pam.d/common-auth) \
@@ -229,16 +255,24 @@ say "lightdm: the right password at once, the sensor never asked"
 lightdm_password
 [ "$(ctl_pending)" = 0 ] || fail "touches left over"
 
-say "lightdm: empty password, matching finger: pam_fprintd's prompt, the message, success"
+say "lightdm: empty password, matching finger: the prompt, the message, success (English only)"
 touch_finger 1
 pam_auth lightdm ""
-granted; prompts 1; saw "$GUIDE"; saw "$MESSAGE"
+granted; prompts 1; saw "$GUIDE"; saw "$MESSAGE"; english_only
 [ "$(ctl_pending)" = 0 ] || fail "touch not consumed"
+say "lightdm in French: the same, in French only"
+touch_finger 1
+PAM_LANG=fr_FR.UTF-8 pam_auth lightdm ""
+granted; prompts 1; saw "$GUIDE_FR"; saw "$MESSAGE_FR"; french_only
+touch_finger 9
+PAM_LANG=fr_BE.UTF-8 pam_auth lightdm ""
+refused; prompts 1; saw "$GUIDE_FR"; french_only
+[ "$(ctl_pending)" = 0 ] || fail "touches left over"
 
 say "lightdm: empty password, unknown finger: failure"
-lightdm_refused "" 9; saw "$GUIDE"
+lightdm_refused "" 9; saw "$GUIDE"; english_only
 say "lightdm: empty password, no finger (30 s): failure"
-# pam_fprintd's 30 s and the sensor's finger deadline (30 s) race: either way, a failure.
+# pam_validity's 30 s and the sensor's finger deadline (30 s) race: either way, a failure.
 lightdm_refused ""; saw "$GUIDE"
 say "lightdm: wrong password, unknown finger: failure"
 lightdm_refused wrong-password 9; saw "$GUIDE"
@@ -248,14 +282,32 @@ pam_auth lightdm wrong-password
 granted; prompts 1; saw "$GUIDE"; saw "$MESSAGE"
 [ "$(ctl_pending)" = 0 ] || fail "touches left over"
 
-say "another service (sudo, su...), matching finger: no message, no password"
+say "another service (sudo, su...), matching finger: the prompt only, no password"
 touch_finger 1
 pam_auth validity-other wrong-password
-granted; prompts 0; not_saw "Posez"; not_saw "reconnu"
+granted; prompts 0; saw "$GUIDE"; english_only; no_confirm
+touch_finger 1
+PAM_LANG=fr_FR.UTF-8 pam_auth validity-other wrong-password
+granted; prompts 0; saw "$GUIDE_FR"; french_only; no_confirm
 say "another service, unknown finger: the password, right one only"
 other_password_only 9
-say "another service, no finger (pam_fprintd's 10 s timeout): the password, right one only"
+say "another service, no finger (the 10 s timeout): the password, right one only"
 other_password_only
+[ "$(ctl_pending)" = 0 ] || fail "touches left over"
+
+say "pam_fprintd.so missing (libpam-fprintd removed): the finger still works"
+module=$(find /usr/lib -name pam_fprintd.so | head -1)
+[ -n "$module" ] || fail "pam_fprintd.so not found"
+mv "$module" /tmp/pam_fprintd.so.away
+lightdm_password
+touch_finger 1
+pam_auth lightdm ""
+granted; prompts 1; saw "$GUIDE"; saw "$MESSAGE"
+touch_finger 1
+pam_auth validity-other wrong-password
+granted; prompts 0; saw "$GUIDE"
+other_password_only 9
+mv /tmp/pam_fprintd.so.away "$module"
 [ "$(ctl_pending)" = 0 ] || fail "touches left over"
 
 say "password fallback: sensor unplugged"
@@ -305,15 +357,13 @@ other_password_only
 if has_owner net.reactivated.Fprint; then fail "something serves net.reactivated.Fprint"; fi
 mv /tmp/fprint.service.away /usr/share/dbus-1/system-services/net.reactivated.Fprint.service
 
-say "pam_fprintd.so missing (libpam-fprintd removed): passwords work, no finger login"
-module=$(find /usr/lib -name pam_fprintd.so | head -1)
-[ -n "$module" ] || fail "pam_fprintd.so not found"
-mv "$module" /tmp/pam_fprintd.so.away
+say "pam_validity.so missing: passwords work, no finger login"
+mv "$SECURITY/pam_validity.so" /tmp/pam_validity.so.away
 lightdm_password
 lightdm_refused ""
 lightdm_refused wrong-password
 other_password_only
-mv /tmp/pam_fprintd.so.away "$module"
+mv /tmp/pam_validity.so.away "$SECURITY/pam_validity.so"
 
 say "pam-auth-update: back to fprintd's profile, then to the stock files, byte for byte"
 pam-auth-update --disable validity-fprint --enable fprintd
