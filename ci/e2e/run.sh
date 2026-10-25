@@ -70,7 +70,10 @@ pam_auth() {
 saw() { printf '%s\n' "$PAM_OUT" | grep -qF -- "$1" || fail "expected '$1'"; }
 not_saw() { if printf '%s\n' "$PAM_OUT" | grep -qF -- "$1"; then fail "unexpected '$1'"; fi; }
 granted() { [ "$PAM_RC" = 0 ] || fail "refused (exit $PAM_RC)"; saw "successfully authenticated"; }
-refused() { [ "$PAM_RC" != 0 ] || fail "granted"; saw "Authentication failure"; not_saw "reconnu"; }
+# Any failure code: pam_unix gives "Authentication failure", the finger after
+# a password on LightDM gives pam_fprintd's own (die), e.g. "Have exhausted
+# maximum number of retries" for a refused finger.
+refused() { [ "$PAM_RC" != 0 ] || fail "granted"; not_saw "successfully authenticated"; not_saw "reconnu"; }
 prompts() { [ "$(printf '%s\n' "$PAM_OUT" | grep -o 'Password:' | wc -l)" = "$1" ] || fail "expected $1 password prompt(s)"; }
 # LightDM, the password first: the right one at once, the sensor untouched.
 lightdm_password() {
@@ -93,7 +96,7 @@ other_password_only() {
     granted; prompts 1; not_saw "Posez"; not_saw "reconnu"
     [ -z "$touch" ] || touch_finger "$touch"
     pam_auth validity-other wrong-password
-    refused; prompts 1; not_saw "Posez"
+    refused; prompts 1; not_saw "Posez"; saw "Authentication failure"
 }
 # The five common-* files, saved under a name and compared byte for byte.
 snap_pam() { rm -rf "/tmp/pam-$1"; mkdir "/tmp/pam-$1"; cp -a /etc/pam.d/common-* "/tmp/pam-$1/"; }

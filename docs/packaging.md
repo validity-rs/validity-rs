@@ -87,9 +87,11 @@ auth  required                      pam_permit.so
   `pam_fprintd` (a match: `ok`, then the message, whose `pam_echo` jumps to
   `pam_permit` whatever it returns) leads to `pam_permit`. Anything else from
   the 30 s `pam_fprintd` (no match, timeout, no daemon, no device, a module
-  that fails to load) is `die`: the stack fails at once with that code, never
-  `PAM_IGNORE` (libpam turns it into a failure), and never reaches the second
-  `pam_unix`.
+  that fails to load) is `die`: the stack fails at once with that code
+  (`PAM_MAXTRIES` for a refused finger, as pam_fprintd reports it; never
+  `PAM_IGNORE`, which libpam turns into a failure), and never reaches the
+  second `pam_unix`. `die` rather than a jump to `pam_deny`: a jump count
+  would depend on the other profiles enabled.
 - **A wrong password also goes to the finger.** Linux-PAM cannot tell an
   empty password from a wrong one: `pam_unix` returns `PAM_AUTH_ERR` for
   both, `pam_get_authtok` accepts an empty answer, and no stock module tests
