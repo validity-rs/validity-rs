@@ -2,8 +2,7 @@
 
 The packager's and maintainer's reference: how every package is built and
 tested, what it installs, the APT repository, its key, and the release
-workflow. It describes `master`; the Ubuntu suites and the `validity-fprint`
-PAM profile are not in 0.1.0 and ship with the next release. Users want the
+workflow, as of 0.1.1. Users want the
 [README](../README.md); contributors the [development guide](development.md).
 
 Every package is built from one vendored source tarball, in a pinned container
@@ -416,9 +415,9 @@ README.md                                       packaging/apt/README.md
 .nojekyll                                       served as it is, no Jekyll
 ```
 
-As of 0.1.0 the published tree holds `trixie` only, with
-`validity-rs.sources` and no per-suite file and no README: the per-suite
-files, the Ubuntu suites and the README come with the next release.
+Since 0.1.1 the published tree holds the `trixie`, `noble` and `resolute`
+suites, a `validity-rs-<suite>.sources` file per suite, `validity-rs.sources`
+(the trixie file, kept for 0.1.0's instructions) and the README.
 
 `ci/packages/apt-repo.sh` writes the tree from a set of .deb files (it is a
 function of them: each publication rebuilds it) with `apt-ftparchive`, puts
@@ -471,10 +470,6 @@ sudo curl -fsSL -o /etc/apt/sources.list.d/validity-rs.sources \
 sudo apt update
 sudo apt install validity-rs-archive-keyring validity-daemon unattended-upgrades
 ```
-
-Until the first release after 0.1.0 is published, the repository holds
-`trixie` only and its source is `validity-rs.sources` (the per-suite files
-come with that release).
 
 The source downloaded is byte for byte the one the suite's keyring package
 installs, so dpkg takes it over without a question. On a release upgrade (say

@@ -35,12 +35,12 @@ have been run there with LightDM. Hardware validation is still going on
 ([#2](https://github.com/validity-rs/validity-rs/issues/2),
 [#11](https://github.com/validity-rs/validity-rs/issues/11)).
 
-| | Released in 0.1.0 | On `master`, ships with the next release |
-|---|---|---|
-| Debian 13 package and APT suite `trixie` | yes | |
-| Fedora, Arch Linux, Alpine packages (GitHub release) | yes | |
-| Ubuntu 24.04 and 26.04 packages and APT suites | | yes |
-| `validity-fprint` PAM profile and `pam_validity.so` | | yes |
+| In 0.1.1 | |
+|---|---|
+| Debian 13 package and APT suite `trixie` | yes |
+| Ubuntu 24.04 and 26.04 packages and APT suites | yes |
+| Fedora, Arch Linux, Alpine packages (GitHub release) | yes |
+| `validity-fprint` PAM profile and `pam_validity.so` | yes |
 
 ## Supported hardware
 
@@ -62,8 +62,8 @@ lsusb | grep -iE '06cb|138a'
 | Distribution | Daemon | Fingerprints app | How |
 |---|---|---|---|
 | Debian 13 (trixie) | yes | yes | APT repository |
-| Ubuntu 26.04 LTS (resolute) | next release | next release | APT repository |
-| Ubuntu 24.04 LTS (noble) | next release | no (its GTK 4.14 and libadwaita 1.5 are too old) | APT repository |
+| Ubuntu 26.04 LTS (resolute) | yes | yes | APT repository |
+| Ubuntu 24.04 LTS (noble) | yes | no (its GTK 4.14 and libadwaita 1.5 are too old) | APT repository |
 | Fedora 44 | yes | yes | package from the GitHub release |
 | Arch Linux | yes | yes | package from the GitHub release |
 | Alpine 3.24 | yes | yes | package from the GitHub release |
@@ -107,8 +107,7 @@ unattended-upgrades is optional: with it, new versions install themselves.
 
 ### Ubuntu 26.04 (resolute) and 24.04 (noble)
 
-The Ubuntu suites are published with the next release. Until then the URLs
-below return 404. Same steps as on Debian, with the source of your release:
+Same steps as on Debian, with the source of your release:
 
 ```bash
 sudo apt install curl gpg
@@ -134,11 +133,11 @@ check them (see [Verify a download](#verify-a-download)), then:
 
 ```bash
 # Fedora 44
-sudo dnf install ./validity-daemon-0.1.0-1.fc44.x86_64.rpm
+sudo dnf install ./validity-daemon-0.1.1-1.fc44.x86_64.rpm
 # Arch Linux
-sudo pacman -U validity-daemon-0.1.0-1-x86_64.pkg.tar.zst
+sudo pacman -U validity-daemon-0.1.1-1-x86_64.pkg.tar.zst
 # Alpine 3.24 (the CI's signing key is not published, hence --allow-untrusted)
-sudo apk add --allow-untrusted validity-daemon-0.1.0-r0.apk validity-daemon-openrc-0.1.0-r0.apk
+sudo apk add --allow-untrusted validity-daemon-0.1.1-r0.apk validity-daemon-openrc-0.1.1-r0.apk
 sudo rc-update add validity-daemon default && sudo rc-service validity-daemon start
 ```
 
@@ -225,7 +224,7 @@ The password always works: no package makes the fingerprint `required`, and
 every failure of the sensor, the daemon or the PAM module falls back to the
 password.
 
-### Debian and Ubuntu: the `validity-fprint` profile (next release)
+### Debian and Ubuntu: the `validity-fprint` profile
 
 The .deb ships an optional pam-auth-update profile, off by default, and its
 module `pam_validity.so`. It replaces libpam-fprintd's `fprintd` profile

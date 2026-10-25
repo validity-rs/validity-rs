@@ -12,7 +12,7 @@ source is `packaging/apt/README.md` in validity-rs.
 
 | Package | What |
 |---|---|
-| `validity-daemon` | the fprintd-compatible fingerprint service and `validity-vendor`; from the release after 0.1.0, also the optional `validity-fprint` PAM profile |
+| `validity-daemon` | the fprintd-compatible fingerprint service and `validity-vendor`; also the optional `validity-fprint` PAM profile |
 | `fingerprint-settings` | the Fingerprints app, one screen to register or remove your right index finger |
 | `validity-rs-archive-keyring` | this repository's key, APT source and unattended-upgrades setting |
 
@@ -21,8 +21,8 @@ source is `packaging/apt/README.md` in validity-rs.
 | Suite | Release | Packages |
 |---|---|---|
 | `trixie` | Debian 13 | all three |
-| `resolute` | Ubuntu 26.04 LTS | all three (from the release after 0.1.0) |
-| `noble` | Ubuntu 24.04 LTS | no `fingerprint-settings`: GTK and libadwaita are too old (from the release after 0.1.0) |
+| `resolute` | Ubuntu 26.04 LTS | all three |
+| `noble` | Ubuntu 24.04 LTS | no `fingerprint-settings`: GTK and libadwaita are too old |
 
 amd64 only.
 

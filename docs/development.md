@@ -280,7 +280,9 @@ A tag `v<version>` (the version in `Cargo.toml`) runs
 4. a build provenance attestation for every file, verified at once;
 5. a draft GitHub release, which a maintainer reviews and publishes;
 6. publication jobs, each enabled by a repository variable: the APT
-   repository (enabled), crates.io, COPR and the AUR (not yet).
+   repository (enabled); crates.io, COPR and the AUR are off. Crates are
+   published by hand with `cargo publish` (0.1.1 is on crates.io); Fedora,
+   Arch and Alpine users download the packages from the GitHub release.
 
 `workflow_dispatch` is a dry run. Details, the key and the one-time setup:
 [packaging.md, Releases](packaging.md#releases).
