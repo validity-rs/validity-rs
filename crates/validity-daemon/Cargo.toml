@@ -41,10 +41,9 @@ removing this package gives fprintd its file back. PAM is not configured: \
 enabling fingerprint login (always 'sufficient', never 'required') is the \
 administrator's choice. An optional pam-auth-update profile, validity-fprint \
 (off by default), replaces libpam-fprintd's own profile with this \
-package's PAM module, pam_validity.so, whose messages follow the \
-session's language (English or French): on LightDM the password comes \
-first and an empty one asks for the finger, saying when to press Enter; \
-other services keep the finger first. \
+package's PAM module, pam_validity.so, which shows no prompt: on LightDM \
+the password comes first, an empty one asks for the finger, and a match \
+says "Access granted"; other services keep the finger first, silently. \
 The Synaptics vendor files, which may not be \
 redistributed, are downloaded on installation by validity-vendor and checked \
 by SHA-256."""

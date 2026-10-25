@@ -127,15 +127,14 @@ always works. Enrol with `fprintd-enroll`.
 On Debian and Ubuntu, the package also ships an optional pam-auth-update profile,
 `validity-fprint`, off by default, in place of libpam-fprintd's `fprintd`
 profile, and its PAM module, `pam_validity.so` (`crates/pam-validity`), which
-speaks the session's language, French or English, never both (pam_fprintd
-follows the application's `setlocale`, which LightDM never calls, so it spoke
-English to a French greeter). On LightDM (greeter and light-locker) the password
+shows no prompt (slick-greeter showed pam_fprintd's only after the finger, in
+English on a French greeter). On LightDM (greeter and light-locker) the password
 comes first, as without a reader: the right password logs in at once; an empty
-one (just Enter) shows the prompt (`Posez votre index droit sur le lecteur
-d'empreintes.`) and waits 30 s for a finger, then `<user> reconnu, appuyez sur
-Entrée.` on a match, a failure otherwise. PAM cannot tell an empty password from
+one (just Enter) waits 30 s for a finger, then shows `Access granted` on a
+match, a failure otherwise. PAM cannot tell an empty password from
 a wrong one, so a wrong password leads to the finger too. Other services (sudo,
-su, ...) keep fprintd's behaviour: the finger first, then the password.
+su, ...) keep fprintd's behaviour, without a word: the finger first, then the
+password.
 libpam-fprintd is not needed by the profile (and left alone if installed).
 
 ```bash
@@ -181,7 +180,7 @@ Arch Linux and Alpine are tested too. The checks are:
   `pamtester`) and a real polkit. The `validity-fprint` PAM profile is enabled with
   `pam-auth-update` over fprintd's and tested there with `pam_validity.so`: on
   LightDM the password first, the finger after an empty one; elsewhere the finger
-  then the password; English or French only, from the locale; passwords still work
+  then the password; nothing said but `Access granted` on LightDM; passwords still work
   with no daemon or no `pam_validity.so`, the finger without `pam_fprintd.so`;
   `common-*` restored byte for byte when it is disabled. `pam_validity.so` is also
   tested through libpam itself (`crates/pam-validity/tests/pam.rs`), against a

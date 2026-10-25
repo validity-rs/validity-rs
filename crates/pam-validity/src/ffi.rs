@@ -1,6 +1,6 @@
-//! The C side: the two entry points libpam calls, and the four libpam
-//! functions the module calls back (`pam_get_user`, `pam_get_item` for the
-//! conversation, `pam_getenv`, and the conversation itself). This is the
+//! The C side: the two entry points libpam calls, and what the module
+//! calls back (`pam_get_item` for the user and the conversation, and the
+//! conversation itself, for the confirmation only). This is the
 //! crate's only unsafe code; each block says why it is sound. Everything is
 //! converted to owned Rust values here, and the rest of the crate is safe.
 //!
@@ -16,7 +16,6 @@ use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
 
-use crate::text::Lang;
 use crate::{Talk, code};
 
 /// `pam_handle_t`, opaque.
@@ -55,16 +54,14 @@ struct PamConv {
 }
 
 const PAM_SUCCESS: c_int = 0;
+const PAM_USER: c_int = 2;
 const PAM_CONV: c_int = 5;
 const PAM_TEXT_INFO: c_int = 4;
 const PAM_SILENT: c_int = 0x8000;
 
 #[link(name = "libpam.so.0", kind = "dylib", modifiers = "+verbatim")]
 unsafe extern "C" {
-    fn pam_get_user(pamh: *mut PamHandle, user: *mut *const c_char, prompt: *const c_char)
-    -> c_int;
     fn pam_get_item(pamh: *const PamHandle, item_type: c_int, item: *mut *const c_void) -> c_int;
-    fn pam_getenv(pamh: *mut PamHandle, name: *const c_char) -> *const c_char;
 }
 
 unsafe extern "C" {
@@ -72,7 +69,7 @@ unsafe extern "C" {
     fn free(ptr: *mut c_void);
 }
 
-/// The application's conversation, `None` under `PAM_SILENT`.
+/// The application's conversation: `None` without one, or under `PAM_SILENT`.
 struct Conversation {
     conv: Option<(ConvFn, *mut c_void)>,
 }
@@ -121,21 +118,22 @@ unsafe fn release(resp: *mut PamResponse, free_fn: unsafe extern "C" fn(*mut c_v
     }
 }
 
-/// `pam_get_user`, without a prompt of ours.
+/// The `PAM_USER` item. Not `pam_get_user`, which would prompt for a
+/// missing user through the conversation: the module asks nothing.
 ///
 /// # Safety
 ///
 /// `pamh` is a live PAM handle.
 unsafe fn user(pamh: *mut PamHandle) -> Option<String> {
-    let mut user: *const c_char = ptr::null();
+    let mut user: *const c_void = ptr::null();
     // SAFETY: `pamh` is live (the caller's contract); `user` is a valid
-    // out-pointer. On success libpam points it at a NUL-terminated string
-    // it owns for the transaction, copied out before returning.
+    // out-pointer. The PAM_USER item, when set, is a NUL-terminated string
+    // libpam owns for the transaction, copied out before returning.
     unsafe {
-        if pam_get_user(pamh, &mut user, ptr::null()) != PAM_SUCCESS || user.is_null() {
+        if pam_get_item(pamh, PAM_USER, &mut user) != PAM_SUCCESS || user.is_null() {
             return None;
         }
-        CStr::from_ptr(user)
+        CStr::from_ptr(user.cast())
             .to_str()
             .ok()
             .filter(|u| !u.is_empty())
@@ -158,24 +156,6 @@ unsafe fn conversation(pamh: *mut PamHandle) -> Option<(ConvFn, *mut c_void)> {
         }
         let conv = &*item.cast::<PamConv>();
         Some((conv.conv?, conv.appdata_ptr))
-    }
-}
-
-/// A variable of the PAM environment.
-///
-/// # Safety
-///
-/// `pamh` is a live PAM handle.
-unsafe fn pam_env(pamh: *mut PamHandle, name: &str) -> Option<String> {
-    let name = CString::new(name).ok()?;
-    // SAFETY: `pamh` is live; `name` is NUL-terminated. The result is null
-    // or a NUL-terminated string libpam owns, copied out at once.
-    unsafe {
-        let value = pam_getenv(pamh, name.as_ptr());
-        if value.is_null() {
-            return None;
-        }
-        CStr::from_ptr(value).to_str().ok().map(str::to_string)
     }
 }
 
@@ -221,18 +201,13 @@ unsafe fn authenticate(
     // SAFETY: the caller's contract (a live handle, argc/argv as libpam
     // passes them) is what these helpers require.
     let (args, user, conv) = unsafe { (args(argc, argv), user(pamh), conversation(pamh)) };
-    let (Some(user), Some(conv)) = (user, conv) else {
+    let Some(user) = user else {
         return code::AUTHINFO_UNAVAIL;
     };
-    let lang = Lang::of_env(
-        // SAFETY: `pamh` is live for the whole call.
-        |var| unsafe { pam_env(pamh, var) },
-        |var| std::env::var(var).ok(),
-    );
     let mut talk = Conversation {
-        conv: (flags & PAM_SILENT == 0).then_some(conv),
+        conv: conv.filter(|_| flags & PAM_SILENT == 0),
     };
-    crate::authenticate(&user, args.iter().map(String::as_str), lang, &mut talk).code()
+    crate::authenticate(&user, args.iter().map(String::as_str), &mut talk).code()
 }
 
 /// Authenticates the user with a finger (the `auth` stack).

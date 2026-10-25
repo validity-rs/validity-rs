@@ -59,12 +59,13 @@ It takes the place of libpam-fprintd's `fprintd` profile (same `Priority: 260`,
 own module, `pam_validity.so`, instead of `pam_fprintd.so`: the same D-Bus calls
 (`GetDefaultDevice`, `ListEnrolledFingers`, `Claim`, `VerifyStart("any")`,
 `VerifyStatus`, `VerifyStop`, `Release`), pam_fprintd's `max-tries=` and
-`timeout=`, and `confirm` for the line after a match. Its messages come from the
-locale variables (`LC_ALL`, `LC_MESSAGES`, `LANG`; the PAM environment before
-the process's): French for a `fr` locale, English otherwise, never both.
-pam_fprintd translates with gettext, which follows `setlocale`, and LightDM's
-PAM process never calls it: pam_fprintd's prompt came out in English on a French
-greeter. It returns `PAM_SUCCESS` only on `verify-match`, `PAM_AUTH_ERR` for a
+`timeout=`, and `confirm`. It never prompts: the only thing it ever says
+(`PAM_TEXT_INFO`) is `Access granted`, after a match with `confirm`, and not
+under `PAM_SILENT`. pam_fprintd's messages were no use on LightDM: on the T480,
+slick-greeter showed nothing after Enter, then the prompt and the result
+together once the finger was read, and in English on a French greeter (gettext
+follows `setlocale`, which LightDM's PAM process never calls). The user is the
+`PAM_USER` item, never asked for. It returns `PAM_SUCCESS` only on `verify-match`, `PAM_AUTH_ERR` for a
 refused finger, `PAM_AUTHINFO_UNAVAIL` for anything else (no daemon, no device,
 no enrolled finger, a D-Bus error, no finger in time, a panic); each D-Bus call
 is bounded to 10 s. It talks to the system bus at its fixed address, never
@@ -77,16 +78,14 @@ left alone if installed.
 
 - **LightDM** (service `lightdm`: the greeter and light-locker): the password
   first, as without fingerprint support. The right password logs in at once
-  and the sensor is not asked. An empty password (just Enter) shows
-  a one-line prompt (`Posez votre index droit sur le lecteur d'empreintes.`;
-  `Posez le doigt...` with several fingers enrolled), then waits up to 30 s for
-  a finger: a match shows `<user> reconnu, appuyez sur Entrée.` (in English,
-  `<user> recognized, press Enter.`; LightDM's greeters wait
+  and the sensor is not asked. An empty password (just Enter) waits up to
+  30 s for a finger, with no prompt: a match shows `Access granted`
+  (LightDM's greeters wait
   for Enter after an authentication that answered no prompt) and logs in; no
   match, no finger, no daemon or no sensor fail, and the greeter asks the
   password again.
 - **Every other service** (sudo, su, login, polkit, ...): fprintd's line
-  with our module, the finger first (10 s), then the password; the prompt only.
+  with our module, the finger first (10 s), then the password; no word.
 
 Enabled, `common-auth` reads:
 
@@ -142,11 +141,11 @@ sudo pam-auth-update --disable validity-fprint --enable fprintd
 `ci/e2e/run.sh` tests it with pamtester against the daemon on the emulated
 sensor, from the stock `common-*` with fprintd's profile enabled: the exact
 stack above; on `lightdm`, the right password succeeds in under 3 s without
-the sensor, an empty password and a matching finger succeed with both lines
-(in English only, and with `LANG=fr_FR.UTF-8` in French only),
+the sensor, an empty password and a matching finger succeed with exactly
+`Access granted` (also with `LANG=fr_FR.UTF-8`) and no other text,
 an empty or wrong password with an unknown finger or no finger (30 s) fail,
 and a wrong password with a matching finger succeeds; on another service, a
-match asks no password and shows the prompt only, a refused finger and the 10 s
+match asks no password and shows nothing, a refused finger and the 10 s
 timeout ask the password, the right one succeeds and a wrong one fails. The
 same password checks pass with the daemon activated without a sensor, with no
 activatable daemon, and with `pam_validity.so` removed; with `pam_fprintd.so`

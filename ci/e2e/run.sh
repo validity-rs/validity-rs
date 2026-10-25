@@ -62,11 +62,6 @@ elapsed_below() {
 # any prompt, in the locale $PAM_LANG (English unless set); output in
 # $PAM_OUT, exit status in $PAM_RC.
 PASSWORD=e2e-Passw0rd
-# pam_validity's prompt (root has one finger enrolled) and confirmation.
-GUIDE="Place your right index finger on the fingerprint reader."
-MESSAGE="root recognized, press Enter."
-GUIDE_FR="Posez votre index droit sur le lecteur d'empreintes."
-MESSAGE_FR="root reconnu, appuyez sur Entrée."
 pam_auth() {
     PAM_RC=0
     PAM_OUT=$(env LC_ALL= LC_MESSAGES= LANG="${PAM_LANG:-en_US.UTF-8}" \
@@ -78,16 +73,18 @@ not_saw() { if printf '%s\n' "$PAM_OUT" | grep -qF -- "$1"; then fail "unexpecte
 granted() { [ "$PAM_RC" = 0 ] || fail "refused (exit $PAM_RC)"; saw "successfully authenticated"; }
 # Any failure code: pam_unix's, or pam_validity's for the finger after a
 # password on LightDM (die).
-refused() { [ "$PAM_RC" != 0 ] || fail "granted"; not_saw "successfully authenticated"; no_confirm; }
-no_confirm() { not_saw "reconnu"; not_saw "recognized"; }
-# Our messages in one language only.
-english_only() { not_saw "Posez"; not_saw "lecteur"; not_saw "reconnu"; not_saw "Entrée"; }
-french_only() { not_saw "Place your"; not_saw "fingerprint reader"; not_saw "recognized"; not_saw "press Enter"; }
+refused() { [ "$PAM_RC" != 0 ] || fail "granted"; not_saw "successfully authenticated"; said_nothing; }
+# What the modules said: the output without pamtester's own lines and
+# pam_unix's prompt. pam_validity says nothing, except "Access granted"
+# after a match on LightDM (confirm).
+said() { printf '%s\n' "$PAM_OUT" | sed 's/Password: *//g' | grep -v -e '^pamtester: ' -e '^[[:space:]]*$' || true; }
+said_nothing() { [ -z "$(said)" ] || fail "unexpected output: $(said)"; }
+said_granted() { [ "$(said)" = "Access granted" ] || fail "expected exactly 'Access granted', got: $(said)"; }
 prompts() { [ "$(printf '%s\n' "$PAM_OUT" | grep -o 'Password:' | wc -l)" = "$1" ] || fail "expected $1 password prompt(s)"; }
 # LightDM, the password first: the right one at once, the sensor untouched.
 lightdm_password() {
     elapsed_below 3 pam_auth lightdm "$PASSWORD"
-    granted; prompts 1; not_saw "$GUIDE"; no_confirm; not_saw "finger"
+    granted; prompts 1; said_nothing
 }
 # LightDM, empty (or wrong) password, then a refused or missing finger: failure.
 lightdm_refused() {
@@ -97,15 +94,15 @@ lightdm_refused() {
     refused; prompts 1
 }
 # Other services, as with fprintd's profile: the finger first, then the
-# password, the right one only, and none of our messages.
+# password, the right one only, and no word from pam_validity.
 other_password_only() {
     local touch=${1:-}
     [ -z "$touch" ] || touch_finger "$touch"
     pam_auth validity-other "$PASSWORD"
-    granted; prompts 1; english_only; no_confirm
+    granted; prompts 1; said_nothing
     [ -z "$touch" ] || touch_finger "$touch"
     pam_auth validity-other wrong-password
-    refused; prompts 1; english_only; saw "Authentication failure"
+    refused; prompts 1; saw "Authentication failure"
 }
 # The five common-* files, saved under a name and compared byte for byte.
 snap_pam() { rm -rf "/tmp/pam-$1"; mkdir "/tmp/pam-$1"; cp -a /etc/pam.d/common-* "/tmp/pam-$1/"; }
@@ -215,10 +212,10 @@ account required pam_permit.so
 PAM
 touch_finger 1
 pam_auth validity-e2e-ours ""
-granted; saw "$GUIDE"; no_confirm; english_only
+granted; said_nothing
 touch_finger 9
 pam_auth validity-e2e-ours ""
-refused; saw "$GUIDE"; saw "Authentication failure"
+refused; saw "Authentication failure"
 [ "$(ctl_pending)" = 0 ] || fail "touches left over"
 
 say "pam-auth-update: validity-fprint over the T480's setup (fprintd's profile on)"
@@ -255,40 +252,34 @@ say "lightdm: the right password at once, the sensor never asked"
 lightdm_password
 [ "$(ctl_pending)" = 0 ] || fail "touches left over"
 
-say "lightdm: empty password, matching finger: the prompt, the message, success (English only)"
+say "lightdm: empty password, matching finger: no prompt, 'Access granted' alone, success"
 touch_finger 1
 pam_auth lightdm ""
-granted; prompts 1; saw "$GUIDE"; saw "$MESSAGE"; english_only
+granted; prompts 1; said_granted
 [ "$(ctl_pending)" = 0 ] || fail "touch not consumed"
-say "lightdm in French: the same, in French only"
+say "lightdm in a French locale: the same line, nothing translated"
 touch_finger 1
 PAM_LANG=fr_FR.UTF-8 pam_auth lightdm ""
-granted; prompts 1; saw "$GUIDE_FR"; saw "$MESSAGE_FR"; french_only
-touch_finger 9
-PAM_LANG=fr_BE.UTF-8 pam_auth lightdm ""
-refused; prompts 1; saw "$GUIDE_FR"; french_only
+granted; prompts 1; said_granted
 [ "$(ctl_pending)" = 0 ] || fail "touches left over"
 
 say "lightdm: empty password, unknown finger: failure"
-lightdm_refused "" 9; saw "$GUIDE"; english_only
+lightdm_refused "" 9
 say "lightdm: empty password, no finger (30 s): failure"
 # pam_validity's 30 s and the sensor's finger deadline (30 s) race: either way, a failure.
-lightdm_refused ""; saw "$GUIDE"
+lightdm_refused ""
 say "lightdm: wrong password, unknown finger: failure"
-lightdm_refused wrong-password 9; saw "$GUIDE"
+lightdm_refused wrong-password 9
 say "lightdm: wrong password, then a matching finger: success (PAM cannot tell empty from wrong)"
 touch_finger 1
 pam_auth lightdm wrong-password
-granted; prompts 1; saw "$GUIDE"; saw "$MESSAGE"
+granted; prompts 1; said_granted
 [ "$(ctl_pending)" = 0 ] || fail "touches left over"
 
-say "another service (sudo, su...), matching finger: the prompt only, no password"
+say "another service (sudo, su...), matching finger: no word, no password"
 touch_finger 1
 pam_auth validity-other wrong-password
-granted; prompts 0; saw "$GUIDE"; english_only; no_confirm
-touch_finger 1
-PAM_LANG=fr_FR.UTF-8 pam_auth validity-other wrong-password
-granted; prompts 0; saw "$GUIDE_FR"; french_only; no_confirm
+granted; prompts 0; said_nothing
 say "another service, unknown finger: the password, right one only"
 other_password_only 9
 say "another service, no finger (the 10 s timeout): the password, right one only"
@@ -302,10 +293,10 @@ mv "$module" /tmp/pam_fprintd.so.away
 lightdm_password
 touch_finger 1
 pam_auth lightdm ""
-granted; prompts 1; saw "$GUIDE"; saw "$MESSAGE"
+granted; prompts 1; said_granted
 touch_finger 1
 pam_auth validity-other wrong-password
-granted; prompts 0; saw "$GUIDE"
+granted; prompts 0; said_nothing
 other_password_only 9
 mv /tmp/pam_fprintd.so.away "$module"
 [ "$(ctl_pending)" = 0 ] || fail "touches left over"

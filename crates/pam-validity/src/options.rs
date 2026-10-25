@@ -13,6 +13,8 @@ pub const DEFAULT_MAX_TRIES: u32 = 3;
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// The longest `timeout=` accepted, in seconds; longer values are ignored.
 pub const MAX_TIMEOUT_SECS: u64 = 3600;
+/// The only thing the module ever says: after a match, with `confirm`.
+pub const CONFIRMATION: &str = "Access granted";
 /// The system bus, as the D-Bus specification fixes it. Deliberately not
 /// `DBUS_SYSTEM_BUS_ADDRESS`: the module runs inside setuid programs (su),
 /// whose caller chooses the environment, and a bus of the caller's would
@@ -26,8 +28,8 @@ pub struct Options {
     pub max_tries: u32,
     /// `timeout=N` (1 <= N <= 3600 seconds): wait for a finger, per attempt.
     pub timeout: Duration,
-    /// `confirm`: after a match, say "`<user>` recognized, press Enter." (for
-    /// LightDM, where the finger answers an empty password).
+    /// `confirm`: after a match, say [`CONFIRMATION`] (for LightDM, where the
+    /// finger answers an empty password and the greeter then waits for Enter).
     pub confirm: bool,
     /// `bus=ADDRESS`: the D-Bus address to use instead of the system bus
     /// (tests, and setups with a bus of their own). The PAM configuration

@@ -14,9 +14,8 @@ use futures_core::Stream;
 use zbus::OwnedObjectPath;
 use zbus::proxy::CacheProperties;
 
+use crate::Outcome;
 use crate::options::Options;
-use crate::text::{self, Lang};
-use crate::{Outcome, Talk};
 
 /// The longest any one D-Bus call (or the connection) may take.
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(10);
@@ -74,10 +73,8 @@ async fn bounded<T>(
     rt.timeout(limit, fut).await.ok()?.ok()
 }
 
-/// Verifies `user`'s finger. Talks only once a device has started
-/// verifying: the prompt (each attempt), then the confirmation after a
-/// match if `opts.confirm`.
-pub async fn verify(user: &str, opts: &Options, lang: Lang, talk: &mut dyn Talk) -> Outcome {
+/// Verifies `user`'s finger, silently.
+pub async fn verify(user: &str, opts: &Options) -> Outcome {
     let Ok(rt) = zruntime::SharedRuntime::current() else {
         return Outcome::Unavailable;
     };
@@ -102,20 +99,17 @@ pub async fn verify(user: &str, opts: &Options, lang: Lang, talk: &mut dyn Talk)
         return Outcome::Unavailable;
     };
     let fingers = bounded(&rt, CALL_TIMEOUT, device.list_enrolled_fingers(user)).await;
-    let Some(fingers) = fingers.filter(|f| !f.is_empty()) else {
+    if fingers.is_none_or(|f| f.is_empty()) {
         return Outcome::Unavailable;
-    };
+    }
     if bounded(&rt, CALL_TIMEOUT, device.claim(user))
         .await
         .is_none()
     {
         return Outcome::Unavailable;
     }
-    let outcome = attempts(&rt, &device, opts, &text::prompt(lang, &fingers), talk).await;
+    let outcome = attempts(&rt, &device, opts).await;
     let _ = bounded(&rt, CALL_TIMEOUT, device.release()).await;
-    if outcome == Outcome::Match && opts.confirm {
-        talk.info(&text::confirm(lang, user));
-    }
     outcome
 }
 
@@ -124,8 +118,6 @@ async fn attempts(
     rt: &zruntime::SharedRuntime,
     device: &DeviceProxy<'_>,
     opts: &Options,
-    prompt: &str,
-    talk: &mut dyn Talk,
 ) -> Outcome {
     // Subscribed before VerifyStart, so that no status can be missed. The
     // stream only takes signals from the owner of net.reactivated.Fprint.
@@ -141,7 +133,6 @@ async fn attempts(
         {
             return Outcome::Unavailable;
         }
-        talk.info(prompt);
         let attempt = wait(rt, &mut statuses, Instant::now() + opts.timeout).await;
         let _ = bounded(rt, CALL_TIMEOUT, device.verify_stop()).await;
         match attempt {

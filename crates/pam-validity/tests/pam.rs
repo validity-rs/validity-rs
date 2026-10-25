@@ -330,7 +330,6 @@ unsafe extern "C" {
         confdir: *const c_char,
         pamh: *mut *mut PamHandle,
     ) -> c_int;
-    fn pam_putenv(pamh: *mut PamHandle, name_value: *const c_char) -> c_int;
     fn pam_authenticate(pamh: *mut PamHandle, flags: c_int) -> c_int;
     fn pam_setcred(pamh: *mut PamHandle, flags: c_int) -> c_int;
     fn pam_end(pamh: *mut PamHandle, status: c_int) -> c_int;
@@ -344,29 +343,28 @@ const PAM_TEXT_INFO: c_int = 4;
 const PAM_SILENT: c_int = 0x8000;
 const PAM_ESTABLISH_CRED: c_int = 2;
 
-/// Records every message; refuses prompts (no answer to give).
+/// Records every message, prompts included; answers none (prompts fail).
 unsafe extern "C" fn record(
     n: c_int,
     msg: *mut *const PamMessage,
     resp: *mut *mut PamResponse,
     data: *mut c_void,
 ) -> c_int {
+    let mut rc = PAM_SUCCESS;
     // SAFETY: libpam passes `n` messages and our `Mutex<Vec<..>>` as `data`.
     unsafe {
         *resp = std::ptr::null_mut();
         let seen = &*data.cast::<Mutex<Vec<(c_int, String)>>>();
         for i in 0..usize::try_from(n).unwrap() {
             let m = &**msg.add(i);
-            if m.msg_style != PAM_TEXT_INFO && m.msg_style != 3 {
-                return PAM_CONV_ERR;
+            if m.msg_style != PAM_TEXT_INFO {
+                rc = PAM_CONV_ERR;
             }
-            seen.lock().unwrap().push((
-                m.msg_style,
-                CStr::from_ptr(m.msg).to_string_lossy().into_owned(),
-            ));
+            let text = CStr::from_ptr(m.msg).to_string_lossy().into_owned();
+            seen.lock().unwrap().push((m.msg_style, text));
         }
     }
-    PAM_SUCCESS
+    rc
 }
 
 struct Run {
@@ -376,28 +374,14 @@ struct Run {
     took: Duration,
 }
 
-impl Run {
-    /// The lines said, all as PAM_TEXT_INFO.
-    fn lines(&self) -> Vec<&str> {
-        assert!(
-            self.said.iter().all(|(s, _)| *s == PAM_TEXT_INFO),
-            "{:?}",
-            self.said
-        );
-        self.said.iter().map(|(_, l)| l.as_str()).collect()
-    }
+/// What a match with `confirm` says, and all the module ever says.
+fn granted() -> Vec<(c_int, String)> {
+    vec![(PAM_TEXT_INFO, "Access granted".to_string())]
 }
 
 /// `pam_authenticate` (then `pam_setcred`) for `user` with the module line's
-/// `args`, the locale `lc_all` in the PAM environment, and `conv` (or none).
-fn pam_with(
-    bus: &str,
-    args: &str,
-    user: Option<&str>,
-    lc_all: &str,
-    flags: c_int,
-    conv: bool,
-) -> Run {
+/// `args` and `conv` (or a conversation without a function).
+fn pam_with(bus: &str, args: &str, user: Option<&str>, flags: c_int, conv: bool) -> Run {
     let module = std::env::current_exe()
         .unwrap()
         .parent()
@@ -418,7 +402,6 @@ fn pam_with(
     let service = CString::new("validity-test").unwrap();
     let user = user.map(|u| CString::new(u).unwrap());
     let confdir = CString::new(dir.0.to_str().unwrap()).unwrap();
-    let env = CString::new(format!("LC_ALL={lc_all}")).unwrap();
     let mut pamh: *mut PamHandle = std::ptr::null_mut();
     // SAFETY: valid strings and conversation, alive until pam_end.
     let (rc, setcred, took) = unsafe {
@@ -427,7 +410,6 @@ fn pam_with(
             pam_start_confdir(service.as_ptr(), user, &conv, confdir.as_ptr(), &mut pamh),
             PAM_SUCCESS
         );
-        assert_eq!(pam_putenv(pamh, env.as_ptr()), PAM_SUCCESS);
         let start = Instant::now();
         let rc = pam_authenticate(pamh, flags);
         let took = start.elapsed();
@@ -443,23 +425,18 @@ fn pam_with(
     }
 }
 
-fn pam(bus: &str, args: &str, lc_all: &str) -> Run {
-    pam_with(bus, args, Some("alice"), lc_all, 0, true)
+fn pam(bus: &str, args: &str) -> Run {
+    pam_with(bus, args, Some("alice"), 0, true)
 }
 
 /// A private bus with the fake on it, and one authentication.
-fn run(script: Script, args: &str, lc_all: &str) -> (Run, Calls) {
+fn run(script: Script, args: &str) -> (Run, Calls) {
     let bus = PrivateBus::start();
     let calls = serve(&bus.address, script, true);
-    let r = pam(&bus.address, args, lc_all);
+    let r = pam(&bus.address, args);
     let c = std::mem::take(&mut *calls.lock().unwrap());
     (r, c)
 }
-
-const EN: &str = "en_US.UTF-8";
-const FR: &str = "fr_FR.UTF-8";
-const PROMPT_EN: &str = "Place your right index finger on the fingerprint reader.";
-const PROMPT_FR: &str = "Posez votre index droit sur le lecteur d'empreintes.";
 
 fn calls(started: usize, stopped: usize) -> Calls {
     Calls {
@@ -474,50 +451,21 @@ fn calls(started: usize, stopped: usize) -> Calls {
 // ------------------------------------------------------------ the tests
 
 #[test]
-fn match_confirmed_in_english() {
-    let (r, c) = run(Script::default(), "max-tries=1 timeout=5 confirm", EN);
-    assert_eq!(r.rc, PAM_SUCCESS);
-    assert_eq!(r.lines(), [PROMPT_EN, "alice recognized, press Enter."]);
+fn match_confirmed_with_one_line() {
+    let (r, c) = run(Script::default(), "max-tries=1 timeout=5 confirm");
+    assert_eq!((r.rc, r.said), (PAM_SUCCESS, granted()));
     assert_eq!(c, calls(1, 1));
     assert_eq!(r.setcred, PAM_SUCCESS);
 }
 
 #[test]
-fn match_confirmed_in_french_only() {
-    let (r, c) = run(Script::default(), "max-tries=1 timeout=5 confirm", FR);
-    assert_eq!(r.rc, PAM_SUCCESS);
-    assert_eq!(r.lines(), [PROMPT_FR, "alice reconnu, appuyez sur Entrée."]);
-    assert_eq!(c, calls(1, 1));
-}
-
-#[test]
-fn several_fingers_any_finger() {
+fn match_without_confirm_says_nothing() {
     let script = Script {
         fingers: Some(vec!["left-thumb", "right-index-finger"]),
         ..Script::default()
     };
-    let (r, _) = run(script.clone(), "timeout=5", FR);
-    assert_eq!(
-        (r.rc, r.lines()),
-        (
-            PAM_SUCCESS,
-            vec!["Posez le doigt sur le lecteur d'empreintes."]
-        )
-    );
-    let (r, _) = run(script, "timeout=5", EN);
-    assert_eq!(
-        (r.rc, r.lines()),
-        (
-            PAM_SUCCESS,
-            vec!["Place your finger on the fingerprint reader."]
-        )
-    );
-}
-
-#[test]
-fn match_without_confirm_says_only_the_prompt() {
-    let (r, c) = run(Script::default(), "max-tries=1 timeout=5", EN);
-    assert_eq!((r.rc, r.lines()), (PAM_SUCCESS, vec![PROMPT_EN]));
+    let (r, c) = run(script, "max-tries=1 timeout=5");
+    assert_eq!((r.rc, r.said), (PAM_SUCCESS, vec![]));
     assert_eq!(c, calls(1, 1));
 }
 
@@ -527,8 +475,8 @@ fn refused_finger() {
         attempts: vec![vec![("verify-no-match", true)]],
         ..Script::default()
     };
-    let (r, c) = run(script, "max-tries=1 timeout=5 confirm", FR);
-    assert_eq!((r.rc, r.lines()), (PAM_AUTH_ERR, vec![PROMPT_FR]));
+    let (r, c) = run(script, "max-tries=1 timeout=5 confirm");
+    assert_eq!((r.rc, r.said), (PAM_AUTH_ERR, vec![]));
     assert_eq!(c, calls(1, 1));
 }
 
@@ -541,12 +489,12 @@ fn second_try_matches() {
         ],
         ..Script::default()
     };
-    let (r, c) = run(script.clone(), "max-tries=2 timeout=5", EN);
-    assert_eq!((r.rc, r.lines()), (PAM_SUCCESS, vec![PROMPT_EN, PROMPT_EN]));
+    let (r, c) = run(script.clone(), "max-tries=2 timeout=5 confirm");
+    assert_eq!((r.rc, r.said), (PAM_SUCCESS, granted()));
     assert_eq!(c, calls(2, 2));
     // The default is three tries.
-    let (r, c) = run(script, "timeout=5", EN);
-    assert_eq!(r.rc, PAM_SUCCESS);
+    let (r, c) = run(script, "timeout=5");
+    assert_eq!((r.rc, r.said), (PAM_SUCCESS, vec![]));
     assert_eq!(c, calls(2, 2));
 }
 
@@ -560,11 +508,8 @@ fn tries_run_out() {
         ],
         ..Script::default()
     };
-    let (r, c) = run(script, "max-tries=2 timeout=5", EN);
-    assert_eq!(
-        (r.rc, r.lines()),
-        (PAM_AUTH_ERR, vec![PROMPT_EN, PROMPT_EN])
-    );
+    let (r, c) = run(script, "max-tries=2 timeout=5 confirm");
+    assert_eq!((r.rc, r.said), (PAM_AUTH_ERR, vec![]));
     assert_eq!(c, calls(2, 2));
 }
 
@@ -578,8 +523,8 @@ fn retry_statuses_keep_waiting() {
         ]],
         ..Script::default()
     };
-    let (r, c) = run(script, "max-tries=1 timeout=5", EN);
-    assert_eq!((r.rc, r.lines()), (PAM_SUCCESS, vec![PROMPT_EN]));
+    let (r, c) = run(script, "max-tries=1 timeout=5 confirm");
+    assert_eq!((r.rc, r.said), (PAM_SUCCESS, granted()));
     assert_eq!(c, calls(1, 1));
 }
 
@@ -600,8 +545,8 @@ fn final_failures() {
         } else {
             "max-tries=3"
         };
-        let (r, c) = run(script, &format!("{max} timeout=5"), EN);
-        assert_eq!((r.rc, r.lines()), (rc, vec![PROMPT_EN]), "{status}");
+        let (r, c) = run(script, &format!("{max} timeout=5 confirm"));
+        assert_eq!((r.rc, r.said), (rc, vec![]), "{status}");
         assert_eq!(c, calls(1, 1), "{status}");
     }
 }
@@ -612,8 +557,8 @@ fn no_finger_in_time() {
         attempts: vec![vec![]],
         ..Script::default()
     };
-    let (r, c) = run(script, "max-tries=3 timeout=1 confirm", EN);
-    assert_eq!((r.rc, r.lines()), (PAM_AUTHINFO_UNAVAIL, vec![PROMPT_EN]));
+    let (r, c) = run(script, "max-tries=3 timeout=1 confirm");
+    assert_eq!((r.rc, &r.said), (PAM_AUTHINFO_UNAVAIL, &vec![]));
     assert!(
         r.took >= Duration::from_secs(1) && r.took < Duration::from_secs(3),
         "{:?}",
@@ -628,27 +573,24 @@ fn forged_match_from_another_peer_is_ignored() {
         forged: true,
         ..Script::default()
     };
-    let (r, c) = run(script, "max-tries=1 timeout=1 confirm", EN);
-    assert_eq!((r.rc, r.lines()), (PAM_AUTHINFO_UNAVAIL, vec![PROMPT_EN]));
+    let (r, c) = run(script, "max-tries=1 timeout=1 confirm");
+    assert_eq!((r.rc, r.said), (PAM_AUTHINFO_UNAVAIL, vec![]));
     assert_eq!(c, calls(1, 1));
 }
 
 #[test]
-fn no_device_no_word() {
-    let (r, c) = run(
-        Script {
-            device: false,
-            ..Script::default()
-        },
-        "confirm",
-        EN,
-    );
-    assert_eq!((r.rc, r.said.len()), (PAM_AUTHINFO_UNAVAIL, 0));
+fn no_device() {
+    let script = Script {
+        device: false,
+        ..Script::default()
+    };
+    let (r, c) = run(script, "confirm");
+    assert_eq!((r.rc, r.said), (PAM_AUTHINFO_UNAVAIL, vec![]));
     assert_eq!(c, Calls::default());
 }
 
 #[test]
-fn no_enrolled_finger_no_word() {
+fn no_enrolled_finger() {
     for fingers in [None, Some(vec![])] {
         let (r, c) = run(
             Script {
@@ -656,9 +598,8 @@ fn no_enrolled_finger_no_word() {
                 ..Script::default()
             },
             "confirm",
-            EN,
         );
-        assert_eq!((r.rc, r.said.len()), (PAM_AUTHINFO_UNAVAIL, 0));
+        assert_eq!((r.rc, r.said), (PAM_AUTHINFO_UNAVAIL, vec![]));
         assert_eq!(
             c,
             Calls {
@@ -670,16 +611,13 @@ fn no_enrolled_finger_no_word() {
 }
 
 #[test]
-fn claim_refused_no_word() {
-    let (r, c) = run(
-        Script {
-            claim_ok: false,
-            ..Script::default()
-        },
-        "confirm",
-        EN,
-    );
-    assert_eq!((r.rc, r.said.len()), (PAM_AUTHINFO_UNAVAIL, 0));
+fn claim_refused() {
+    let script = Script {
+        claim_ok: false,
+        ..Script::default()
+    };
+    let (r, c) = run(script, "confirm");
+    assert_eq!((r.rc, r.said), (PAM_AUTHINFO_UNAVAIL, vec![]));
     assert_eq!(
         c,
         Calls {
@@ -691,31 +629,22 @@ fn claim_refused_no_word() {
 }
 
 #[test]
-fn verify_refused_no_word_released() {
-    let (r, c) = run(
-        Script {
-            start_ok: false,
-            ..Script::default()
-        },
-        "confirm",
-        EN,
-    );
-    assert_eq!((r.rc, r.said.len()), (PAM_AUTHINFO_UNAVAIL, 0));
-    assert_eq!(
-        c,
-        Calls {
-            stopped: 0,
-            ..calls(1, 0)
-        }
-    );
+fn verify_refused_released() {
+    let script = Script {
+        start_ok: false,
+        ..Script::default()
+    };
+    let (r, c) = run(script, "confirm");
+    assert_eq!((r.rc, r.said), (PAM_AUTHINFO_UNAVAIL, vec![]));
+    assert_eq!(c, calls(1, 0));
 }
 
 #[test]
 fn nobody_owns_the_name() {
     let bus = PrivateBus::start();
     let calls = serve(&bus.address, Script::default(), false);
-    let r = pam(&bus.address, "confirm", EN);
-    assert_eq!((r.rc, r.said.len()), (PAM_AUTHINFO_UNAVAIL, 0));
+    let r = pam(&bus.address, "confirm");
+    assert_eq!((r.rc, &r.said), (PAM_AUTHINFO_UNAVAIL, &vec![]));
     assert!(r.took < Duration::from_secs(2), "{:?}", r.took);
     assert_eq!(*calls.lock().unwrap(), Calls::default());
 }
@@ -723,39 +652,36 @@ fn nobody_owns_the_name() {
 #[test]
 fn no_bus() {
     let dir = TempDir::new("nobus");
-    let r = pam(
-        &format!("unix:path={}/socket", dir.0.display()),
-        "confirm",
-        EN,
-    );
-    assert_eq!((r.rc, r.said.len()), (PAM_AUTHINFO_UNAVAIL, 0));
+    let r = pam(&format!("unix:path={}/socket", dir.0.display()), "confirm");
+    assert_eq!((r.rc, &r.said), (PAM_AUTHINFO_UNAVAIL, &vec![]));
     assert!(r.took < Duration::from_secs(2), "{:?}", r.took);
 }
 
 #[test]
-fn silent_matches_without_a_word() {
+fn silent_or_no_conversation_matches_without_a_word() {
     let bus = PrivateBus::start();
     let _calls = serve(&bus.address, Script::default(), true);
     let r = pam_with(
         &bus.address,
         "timeout=5 confirm",
         Some("alice"),
-        EN,
         PAM_SILENT,
         true,
     );
-    assert_eq!((r.rc, r.said.len()), (PAM_SUCCESS, 0));
+    assert_eq!((r.rc, r.said), (PAM_SUCCESS, vec![]));
+    // A fresh fake: its script answers one VerifyStart.
+    let bus = PrivateBus::start();
+    let _calls = serve(&bus.address, Script::default(), true);
+    let r = pam_with(&bus.address, "timeout=5 confirm", Some("alice"), 0, false);
+    assert_eq!(r.rc, PAM_SUCCESS);
 }
 
 #[test]
-fn no_user_or_no_conversation() {
+fn no_user_no_question() {
     let bus = PrivateBus::start();
     let calls = serve(&bus.address, Script::default(), true);
-    // No user: libpam asks the conversation, which refuses.
-    let r = pam_with(&bus.address, "timeout=5", None, EN, 0, true);
-    assert_eq!(r.rc, PAM_AUTHINFO_UNAVAIL);
-    // A conversation without a function.
-    let r = pam_with(&bus.address, "timeout=5", Some("alice"), EN, 0, false);
-    assert_eq!(r.rc, PAM_AUTHINFO_UNAVAIL);
+    // No user: the module fails without asking for one.
+    let r = pam_with(&bus.address, "timeout=5 confirm", None, 0, true);
+    assert_eq!((r.rc, r.said), (PAM_AUTHINFO_UNAVAIL, vec![]));
     assert_eq!(*calls.lock().unwrap(), Calls::default());
 }
